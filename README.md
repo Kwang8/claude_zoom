@@ -71,14 +71,16 @@ cd /path/to/your/repo
 claude-zoom chat
 ```
 
-This opens the same TUI but with an activity log panel on the right (instead of a code snippet) and an auto-cycling turn-based voice loop:
+This opens a Zoom-chat-style TUI: a clean scrolling **transcript** of user ↔ claude messages fills most of the screen, and a small **footer** below it holds the animated character plus a one-line "now doing" ticker that shows Claude's current tool call. Auto-cycling turn-based voice loop:
 
 1. Character goes to `listening`, records 6 seconds of your mic.
-2. Parakeet transcribes → the transcript shows in the log as `🎤 you: …`.
+2. Parakeet transcribes → your line appears in the transcript as `you  14:23` with the text indented below.
 3. Character goes to `working` and spawns `claude -p --output-format stream-json --verbose --resume <id>` under the hood.
-4. Every tool call, tool result, and assistant message streams into the activity log as it happens (`→ Read(login.tsx)`, `← 420 lines`, `💬 "I found the issue"`, `✓ done (3.4s)`).
+4. As Claude runs tools, the ticker below the character updates: `→ Read(login.tsx)`, then `→ Bash(npm test)`, etc. Only the most recent tool is shown — no wall of text.
 5. When Claude finishes, a fast-model (Haiku) layer summarizes the turn into one spoken sentence. If Claude's own final text is already crisp and short, it gets spoken verbatim (fast path, zero extra latency); otherwise Haiku rewrites it.
-6. Character flips to `talking`, speaks the summary, then back to `listening` for the next turn.
+6. The summary appears in the transcript as a `claude  14:23` entry, character flips to `talking` and speaks it, ticker clears, then back to `listening`.
+
+The transcript only ever shows user + claude messages. Tool noise lives in the ticker and evaporates between turns. Errors show as a red `claude (error)` entry in the transcript.
 
 Session memory is preserved across turns by capturing the session UUID from the first turn's `system.init` event and passing `--resume <uuid>` on every subsequent turn, so Claude remembers what you talked about a minute ago.
 

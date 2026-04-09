@@ -13,14 +13,16 @@ UI animations keep running.
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
-from textual.widgets import Header, Label, RichLog, Static, TextArea
+from textual.widgets import Header, Label, Static, TextArea
 
 if TYPE_CHECKING:
     from .chat import ClaudeSession
@@ -533,19 +535,103 @@ class PresentApp(App):
 # ─── ChatApp: voice interface to a live Claude Code instance ─────────────
 
 
-class ActivityLog(RichLog):
-    """Right-side scrollable log of Claude's activity (tool calls, results,
-    assistant messages). Worker thread pushes formatted lines in via
-    `call_from_thread`.
+@dataclass
+class ChatMessage:
+    role: Literal["user", "claude", "claude_error"]
+    text: str
+    timestamp: str  # "HH:MM"
+
+
+class TranscriptEntry(Static):
+    """One message entry in the transcript: header + indented body."""
+
+    DEFAULT_CSS = """
+    TranscriptEntry {
+        padding: 0 0 1 0;
+        width: 1fr;
+        height: auto;
+    }
+    """
+
+    def __init__(self, message: ChatMessage) -> None:
+        super().__init__()
+        self.message = message
+
+    def on_mount(self) -> None:
+        self._render_message()
+
+    def _render_message(self) -> None:
+        role = self.message.role
+        ts = self.message.timestamp
+        # Indent body lines with 4 spaces so messages read like chat bubbles.
+        body = "\n".join("    " + line for line in self.message.text.splitlines())
+        if not body.strip():
+            body = "    "
+
+        if role == "user":
+            header = f"[bold magenta]you[/bold magenta]  [dim]{ts}[/dim]"
+            body_markup = f"[white]{_escape(self.message.text)}[/white]"
+        elif role == "claude":
+            header = f"[bold cyan]claude[/bold cyan]  [dim]{ts}[/dim]"
+            body_markup = f"[white]{_escape(self.message.text)}[/white]"
+        else:  # claude_error
+            header = f"[bold red]claude (error)[/bold red]  [dim]{ts}[/dim]"
+            body_markup = f"[red]{_escape(self.message.text)}[/red]"
+
+        body_indented = "\n".join(
+            "    " + line for line in body_markup.splitlines()
+        )
+        self.update(f"{header}\n{body_indented}")
+
+
+class TranscriptView(VerticalScroll):
+    """Scrollable conversation view. Only user + claude messages go here —
+    never tool calls, tool results, or intermediate events.
     """
 
     DEFAULT_CSS = """
-    ActivityLog {
+    TranscriptView {
         width: 1fr;
+        height: 1fr;
+        padding: 1 2;
         border: round $accent;
-        padding: 0 1;
     }
     """
+
+    def append_message(self, message: ChatMessage) -> None:
+        self.mount(TranscriptEntry(message))
+        self.scroll_end(animate=False)
+
+
+class ActivityTicker(Static):
+    """Single-line 'now doing' indicator for the in-flight turn.
+
+    Only the most recent tool call is shown; updated via `set_activity` from
+    the worker thread and wiped with `clear` between turns.
+    """
+
+    DEFAULT_CSS = """
+    ActivityTicker {
+        width: 1fr;
+        padding: 1 2;
+        color: $text-muted;
+        border: round $accent-darken-1;
+    }
+    """
+
+    activity: reactive[str] = reactive("")
+
+    def on_mount(self) -> None:
+        self._render_line()
+
+    def watch_activity(self, _new: str) -> None:
+        self._render_line()
+
+    def _render_line(self) -> None:
+        if self.activity:
+            self.update(f"[cyan]→[/cyan] {_escape(self.activity)}")
+        else:
+            self.update("[dim](idle)[/dim]")
 
 
 class ChatApp(App):
@@ -558,9 +644,9 @@ class ChatApp(App):
     Screen {
         layout: vertical;
     }
-    #body {
+    #footer {
         layout: horizontal;
-        height: 1fr;
+        height: 9;
     }
     """
 
@@ -576,14 +662,10 @@ class ChatApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        with Horizontal(id="body"):
+        yield TranscriptView(id="transcript")
+        with Horizontal(id="footer"):
             yield CharacterPanel(id="character")
-            yield ActivityLog(
-                id="activity-log",
-                wrap=True,
-                markup=True,
-                highlight=False,
-            )
+            yield ActivityTicker(id="ticker")
         yield StatusBar(id="status")
 
     def on_mount(self) -> None:
@@ -591,10 +673,6 @@ class ChatApp(App):
         self.sub_title = f"cwd: {self.session.cwd or '.'}"
         self.query_one(StatusBar).progress = "booting"
         self.query_one(StatusBar).action = "warming up"
-        self.query_one(ActivityLog).write(
-            "[dim]🎙 say something after the intro — I'll listen for "
-            f"{int(CHAT_LISTEN_SECONDS)} seconds after every reply.[/dim]"
-        )
         self._run_chat_loop()
 
     # ─── Key actions ───────────────────────────────────────────────────────
@@ -613,19 +691,22 @@ class ChatApp(App):
     @work(thread=True, exclusive=True)
     def _run_chat_loop(self) -> None:
         # Deferred imports so `from claude_zoom.tui import ChatApp` is cheap.
+        from .chat import summarize_tool_args
         from .narrator import summarize_turn
         from .voice import listen_once, speak
 
-        self._set_state("talking", "hey! what can I do for you?")
-        self._append_log("[italic cyan]🎙 hey! what can I do for you?[/italic cyan]")
+        intro = "Hey! What can I do for you?"
+        self._set_state("talking", intro)
+        self._append_message("claude", intro)
         self._set_progress("ready")
-        self._set_action("")
-        speak("Hey! What can I do for you?")
+        self._set_action("speaking intro")
+        speak(intro)
 
         turn = 0
         while not self._stop_flag.is_set():
             turn += 1
             # ── LISTEN ──
+            self._set_ticker("")
             self._set_state("listening", "")
             self._set_progress(f"turn {turn}")
             self._set_action(f"🎙 listening {int(CHAT_LISTEN_SECONDS)}s...")
@@ -633,12 +714,12 @@ class ChatApp(App):
             if self._stop_flag.is_set():
                 break
             if not transcript:
-                # Silence — go back to idle briefly then listen again.
+                # Silence — idle briefly then listen again.
                 self._set_state("idle", "")
                 self._set_action("(silence — listening again)")
                 continue
 
-            self._append_log(f"[bold magenta]🎤 you:[/bold magenta] {_escape(transcript)}")
+            self._append_message("user", transcript)
             self._set_action(f"heard: {transcript[:60]}")
 
             # ── WORK ──
@@ -648,12 +729,20 @@ class ChatApp(App):
             try:
                 for event in self.session.send(transcript):
                     events.append(event)
-                    for line in _chat_event_lines(event):
-                        self._append_log(line)
+                    if event.get("type") == "assistant":
+                        content = (event.get("message") or {}).get("content") or []
+                        for item in content:
+                            if item.get("type") == "tool_use":
+                                name = item.get("name", "?")
+                                short = summarize_tool_args(
+                                    name, item.get("input") or {}
+                                )
+                                self._set_ticker(f"{name}({short})")
             except Exception as e:  # noqa: BLE001
-                self._append_log(f"[red]✗ claude error: {_escape(str(e))}[/red]")
+                self._append_message("claude_error", f"{e}")
                 self._set_state("idle", "")
                 self._set_action(f"error: {str(e)[:60]}")
+                self._set_ticker("")
                 continue
 
             if self._stop_flag.is_set():
@@ -662,6 +751,7 @@ class ChatApp(App):
             # ── SUMMARIZE + SPEAK ──
             self._set_state("thinking", "")
             self._set_action("summarizing...")
+            self._set_ticker("")
             try:
                 summary = summarize_turn(transcript, events)
             except Exception as e:  # noqa: BLE001
@@ -669,7 +759,7 @@ class ChatApp(App):
 
             if not summary:
                 summary = "Done."
-            self._append_log(f"[italic cyan]🎙 {_escape(summary)}[/italic cyan]")
+            self._append_message("claude", summary)
             self._set_state("talking", summary)
             self._set_action("speaking")
             speak(summary)
@@ -681,7 +771,7 @@ class ChatApp(App):
     # ─── Main-thread helpers ───────────────────────────────────────────────
 
     def _call(self, fn, *args, **kwargs) -> None:
-        # Same pattern as PresentApp: let exceptions propagate via Textual.
+        # Let exceptions propagate via Textual's normal crash handling.
         try:
             self.call_from_thread(fn, *args, **kwargs)
         except Exception:  # pragma: no cover — app shutting down
@@ -701,15 +791,16 @@ class ChatApp(App):
     def _set_action(self, text: str) -> None:
         self._call(lambda: setattr(self.query_one(StatusBar), "action", text))
 
-    def _append_log(self, line: str) -> None:
-        self._call(lambda: self.query_one(ActivityLog).write(line))
+    def _set_ticker(self, text: str) -> None:
+        self._call(lambda: setattr(self.query_one(ActivityTicker), "activity", text))
 
-
-def _chat_event_lines(event: dict) -> list[str]:
-    # Local import to avoid a top-of-module circular reference with chat.py.
-    from .chat import event_to_log_lines
-
-    return event_to_log_lines(event)
+    def _append_message(self, role: str, text: str) -> None:
+        msg = ChatMessage(
+            role=role,  # type: ignore[arg-type]
+            text=text,
+            timestamp=datetime.now().strftime("%H:%M"),
+        )
+        self._call(lambda: self.query_one(TranscriptView).append_message(msg))
 
 
 def _escape(text: str) -> str:

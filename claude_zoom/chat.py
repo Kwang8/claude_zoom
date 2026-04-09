@@ -173,7 +173,7 @@ def _event_to_lines(event: dict[str, Any]) -> list[str]:
                     out.append(f"[white]💬 {_escape(text)}[/white]")
             elif t == "tool_use":
                 name = item.get("name", "?")
-                short = _summarize_tool_args(name, item.get("input") or {})
+                short = summarize_tool_args(name, item.get("input") or {})
                 out.append(f"[cyan]→ {name}({short})[/cyan]")
             elif t == "thinking":
                 # Noisy; skip by default.
@@ -222,7 +222,7 @@ def _event_to_lines(event: dict[str, Any]) -> list[str]:
     return []
 
 
-def _summarize_tool_args(tool: str, args: dict[str, Any]) -> str:
+def summarize_tool_args(tool: str, args: dict[str, Any]) -> str:
     """Best-effort one-line summary of a tool_use `input` block."""
     if tool in ("Read", "Edit", "Write", "NotebookRead", "NotebookEdit"):
         path = args.get("file_path") or args.get("notebook_path") or ""
@@ -289,7 +289,7 @@ def events_to_transcript(events: list[dict[str, Any]]) -> str:
                         lines.append(f"assistant: {text}")
                 elif t == "tool_use":
                     name = item.get("name", "?")
-                    short = _summarize_tool_args(name, item.get("input") or {})
+                    short = summarize_tool_args(name, item.get("input") or {})
                     lines.append(f"tool_use: {name}({short})")
         elif etype == "user":
             msg = event.get("message") or {}
