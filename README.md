@@ -1,0 +1,185 @@
+# claude_zoom
+
+Claude walks you through a PR or commit in your terminal as a series of narrated code snippets, then listens for spoken questions and answers them out loud — all local, no Discord, no cloud APIs.
+
+Point it at a PR number, a commit SHA, or a GitHub URL:
+
+```bash
+claude-zoom present 42
+claude-zoom present 885fbd6
+claude-zoom present https://github.com/owner/repo/commit/885fbd6...
+```
+
+You get an interactive Textual TUI with a little animated ASCII character that reacts to state (talking / listening / thinking), the current code snippet on the right with syntax highlighting, macOS `say` for narration, and Parakeet running locally for speech-to-text.
+
+![demo](docs/demo.png)
+<!-- no screenshot checked in yet — run `claude-zoom present <ref>` to see it -->
+
+## Quickstart
+
+Requirements: **Apple Silicon Mac**, Python 3.11+, and the `claude` and `gh` CLIs already logged in.
+
+```bash
+git clone https://github.com/Kwang8/claude_zoom.git
+cd claude_zoom
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[voice]'
+```
+
+**No API key required** — `claude_zoom` shells out to `claude -p` in headless mode, which reuses your existing Claude Code subscription auth.
+
+Grant your terminal microphone permission in System Settings → Privacy & Security → Microphone (macOS will prompt the first time `sounddevice` tries to record).
+
+## Usage
+
+### Phase 1: generate a walkthrough (no voice)
+
+```bash
+cd /path/to/your/repo
+claude-zoom generate 42                                 # PR number
+claude-zoom generate 885fbd6                            # commit SHA
+claude-zoom generate https://github.com/o/r/pull/42     # URL (works from anywhere)
+```
+
+Pretty-prints the walkthrough to your terminal with syntax highlighting. Pass `--dry-run` to print the raw JSON instead.
+
+### Phase 2: interactive TUI with voice Q&A
+
+```bash
+cd /path/to/your/repo
+claude-zoom present 42
+```
+
+The TUI:
+
+1. Shows each snippet with syntax highlighting on the right side.
+2. Speaks the narration using macOS `say`, with the character in `[talking]` state.
+3. Listens on your mic for ~5 seconds (character in `[listening]` state, countdown in the status bar).
+4. If it hears a question, transcribes it locally with Parakeet, asks `claude -p` for a short spoken-style answer (character in `[thinking]`), and speaks the reply.
+5. Advances to the next snippet. The status bar at the bottom always shows where you are (`2/4 · Phone/email tab switcher · speaking`) so you can see it's alive during long steps.
+
+Key bindings inside the TUI:
+
+| Key | Action |
+| --- | --- |
+| `q` | Quit |
+| `→` or `n` | Skip to next snippet (after current narration finishes — can't interrupt `say`) |
+| `r` | Replay current narration |
+
+Pass `--plain` to fall back to a linear printer (no TUI, no character) — useful for small terminals or when stdout is being piped. Pass `--no-listen` to narrate without the Q&A loop.
+
+### Character demo (no audio, no network)
+
+Eyeball the animated character without setting up a walkthrough:
+
+```bash
+python -m claude_zoom.tui
+```
+
+Rotates through idle / talking / listening / thinking every 3 seconds.
+
+### Tweaking the voice
+
+`say` ships with dozens of voices. List them:
+
+```bash
+say -v '?'
+```
+
+Then pick one and stick it in your env:
+
+```bash
+export CLAUDE_ZOOM_SAY_VOICE=Samantha       # or Daniel, Karen, Alex, ...
+export CLAUDE_ZOOM_SAY_RATE=180             # words per minute (default ~175)
+```
+
+## Testing instructions
+
+Since this is mac/mic/audio heavy, most of the verification is manual. There are a few deterministic checks you can run before any audio work.
+
+### 1. Import + CLI smoke test (fast, no audio)
+
+```bash
+source .venv/bin/activate
+python -c "from claude_zoom import cli, pr, snippets, qa, voice, tui; print('ok')"
+claude-zoom --help
+claude-zoom generate --help
+claude-zoom present --help
+```
+
+### 2. Ref parser unit-ish test
+
+```bash
+python -c "
+from claude_zoom.pr import parse_ref
+assert parse_ref('42') == ('pr', {'number': 42, 'repo': None})
+assert parse_ref('885fbd6')[0] == 'commit'
+assert parse_ref('https://github.com/o/r/pull/7')[0] == 'pr'
+assert parse_ref('https://github.com/o/r/commit/deadbeef')[0] == 'commit'
+print('ok')
+"
+```
+
+### 3. Headless TUI end-to-end (no audio, no network)
+
+Runs the full `PresentApp` worker loop against a fake walkthrough with `speak` and `listen_once` patched out:
+
+```bash
+python <<'PY'
+import asyncio
+from unittest.mock import patch
+from claude_zoom.pr import ChangeContext, ChangeFile
+from claude_zoom.snippets import CodeSnippet, SnippetWalkthrough
+from claude_zoom.tui import PresentApp, StatusBar
+
+change = ChangeContext(kind="commit", ref="abc1234", title="fake", body="",
+                       author="t", url="https://x",
+                       files=[ChangeFile("a.py", 1, 0)], diff="")
+snippets = [CodeSnippet(title=f"s{i}", file_path="a.py", language="python",
+                        code=f"x={i}", explanation=f"e{i}", narration=f"n{i}")
+            for i in range(3)]
+wt = SnippetWalkthrough(ref="abc1234", title="fake", url="https://x",
+                        intro_narration="intro", snippets=snippets,
+                        outro_narration="outro")
+
+calls = []
+async def main():
+    with patch("claude_zoom.voice.speak", lambda t: calls.append(t)), \
+         patch("claude_zoom.voice.listen_once", lambda seconds=5.0: None):
+        app = PresentApp(change, wt)
+        async with app.run_test() as pilot:
+            await pilot.pause(1.5)
+            s = app.query_one(StatusBar)
+            assert s.progress == "outro"
+            assert s.action == "done"
+            assert calls == ["intro", "n0", "n1", "n2", "outro"]
+asyncio.run(main())
+print("ok")
+PY
+```
+
+### 4. Character demo visually
+
+```bash
+python -m claude_zoom.tui
+```
+
+Should launch Textual, show an ASCII robot, cycle through 4 states every 3 seconds. Press `Ctrl+C` to exit.
+
+### 5. Live end-to-end (audio, mic, network)
+
+```bash
+cd ~/some/repo
+claude-zoom present <pr# or sha>
+```
+
+First run downloads Parakeet (~600 MB). You should hear the intro narration, see the first snippet, hear its narration, see the listening countdown, speak a question, see the transcript in the status bar, hear the answer, and then progress to the next snippet. Press `q` to quit at any time.
+
+## Known limits
+
+- Only accepts questions **between** snippets, not mid-narration (turn-based).
+- No interrupt: pressing `→` or `r` during `say` waits for it to finish — `say` is an opaque blocking subprocess.
+- Silence detection is a simple RMS threshold. If your mic is noisy you may get spurious transcriptions.
+- TypeScript/TSX snippets render with JavaScript syntax highlighting (tree-sitter-languages doesn't bundle TS).
+- Apple Silicon only (MLX requirement). Intel Macs and non-macOS systems won't work without swapping out `parakeet-mlx` and `say`.

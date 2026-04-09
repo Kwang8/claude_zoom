@@ -1,0 +1,31 @@
+[project]
+name = "claude-zoom"
+version = "0.1.0"
+description = "Claude walks through PR code snippets in your terminal, with local voice Q&A"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1.7",
+    "python-dotenv>=1.0.1",
+    "rich>=13.9.0",
+]
+
+[project.optional-dependencies]
+# Phase 2 — local voice: macOS `say` for TTS, parakeet-mlx for STT.
+# Apple Silicon only (MLX requirement).
+voice = [
+    "parakeet-mlx>=0.3.0",
+    "sounddevice>=0.5.0",
+    "numpy>=1.26.0",
+    "soundfile>=0.12.1",
+    "textual>=0.80.0",
+]
+
+[project.scripts]
+claude-zoom = "claude_zoom.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["claude_zoom*"]
