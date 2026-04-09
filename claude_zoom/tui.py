@@ -20,17 +20,19 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Header, Label, Static, TextArea
+from textual.widgets import Header, Label, RichLog, Static, TextArea
 
 if TYPE_CHECKING:
+    from .chat import ClaudeSession
     from .pr import ChangeContext
     from .snippets import CodeSnippet, SnippetWalkthrough
 
 
 LISTEN_SECONDS = 5.0
+CHAT_LISTEN_SECONDS = 6.0
 TICK_INTERVAL = 0.35
 
-State = Literal["idle", "talking", "listening", "thinking"]
+State = Literal["idle", "talking", "listening", "thinking", "working"]
 
 
 # ─── ASCII character frames ────────────────────────────────────────────────
@@ -100,12 +102,33 @@ _THINKING = [
     "  /_|_\\    ",
 ]
 
+# "Working" is the state while Claude's subprocess is running real tools —
+# we reuse the thinking frame layout but with a cog instead of dots.
+_WORKING = [
+    "   ___     \n"
+    "  |o o|  * \n"
+    "  |===|    \n"
+    "  /| |\\    \n"
+    "  /_|_\\    ",
+    "   ___     \n"
+    "  |o o| *  \n"
+    "  |===|    \n"
+    "  /| |\\    \n"
+    "  /_|_\\    ",
+    "   ___     \n"
+    "  |o o|*   \n"
+    "  |===|    \n"
+    "  /| |\\    \n"
+    "  /_|_\\    ",
+]
+
 
 CHARACTER_FRAMES: dict[State, list[str]] = {
     "idle": _IDLE,
     "talking": _TALKING,
     "listening": _LISTENING,
     "thinking": _THINKING,
+    "working": _WORKING,
 }
 
 STATE_LABELS: dict[State, str] = {
@@ -113,6 +136,7 @@ STATE_LABELS: dict[State, str] = {
     "talking": "[ talking... ]",
     "listening": "[ listening ]",
     "thinking": "[ thinking... ]",
+    "working": "[ working... ]",
 }
 
 
@@ -506,11 +530,197 @@ class PresentApp(App):
         )
 
 
+# ─── ChatApp: voice interface to a live Claude Code instance ─────────────
+
+
+class ActivityLog(RichLog):
+    """Right-side scrollable log of Claude's activity (tool calls, results,
+    assistant messages). Worker thread pushes formatted lines in via
+    `call_from_thread`.
+    """
+
+    DEFAULT_CSS = """
+    ActivityLog {
+        width: 1fr;
+        border: round $accent;
+        padding: 0 1;
+    }
+    """
+
+
+class ChatApp(App):
+    """Voice-first Textual app that lets the user interact with a live
+    Claude Code instance via ClaudeSession. Auto-cycles:
+    listen → claude -p → log events → summarize → speak → repeat.
+    """
+
+    CSS = """
+    Screen {
+        layout: vertical;
+    }
+    #body {
+        layout: horizontal;
+        height: 1fr;
+    }
+    """
+
+    BINDINGS = [
+        Binding("q", "quit", "quit"),
+        Binding("escape", "cancel_turn", "cancel turn"),
+    ]
+
+    def __init__(self, session: "ClaudeSession") -> None:
+        super().__init__()
+        self.session = session
+        self._stop_flag = threading.Event()
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=False)
+        with Horizontal(id="body"):
+            yield CharacterPanel(id="character")
+            yield ActivityLog(
+                id="activity-log",
+                wrap=True,
+                markup=True,
+                highlight=False,
+            )
+        yield StatusBar(id="status")
+
+    def on_mount(self) -> None:
+        self.title = "claude_zoom · chat"
+        self.sub_title = f"cwd: {self.session.cwd or '.'}"
+        self.query_one(StatusBar).progress = "booting"
+        self.query_one(StatusBar).action = "warming up"
+        self.query_one(ActivityLog).write(
+            "[dim]🎙 say something after the intro — I'll listen for "
+            f"{int(CHAT_LISTEN_SECONDS)} seconds after every reply.[/dim]"
+        )
+        self._run_chat_loop()
+
+    # ─── Key actions ───────────────────────────────────────────────────────
+
+    def action_cancel_turn(self) -> None:
+        self.session.cancel()
+        self.query_one(StatusBar).action = "cancel sent"
+
+    async def action_quit(self) -> None:  # type: ignore[override]
+        self._stop_flag.set()
+        self.session.cancel()
+        self.exit()
+
+    # ─── Main worker: voice loop ───────────────────────────────────────────
+
+    @work(thread=True, exclusive=True)
+    def _run_chat_loop(self) -> None:
+        # Deferred imports so `from claude_zoom.tui import ChatApp` is cheap.
+        from .narrator import summarize_turn
+        from .voice import listen_once, speak
+
+        self._set_state("talking", "hey! what can I do for you?")
+        self._append_log("[italic cyan]🎙 hey! what can I do for you?[/italic cyan]")
+        self._set_progress("ready")
+        self._set_action("")
+        speak("Hey! What can I do for you?")
+
+        turn = 0
+        while not self._stop_flag.is_set():
+            turn += 1
+            # ── LISTEN ──
+            self._set_state("listening", "")
+            self._set_progress(f"turn {turn}")
+            self._set_action(f"🎙 listening {int(CHAT_LISTEN_SECONDS)}s...")
+            transcript = listen_once(seconds=CHAT_LISTEN_SECONDS)
+            if self._stop_flag.is_set():
+                break
+            if not transcript:
+                # Silence — go back to idle briefly then listen again.
+                self._set_state("idle", "")
+                self._set_action("(silence — listening again)")
+                continue
+
+            self._append_log(f"[bold magenta]🎤 you:[/bold magenta] {_escape(transcript)}")
+            self._set_action(f"heard: {transcript[:60]}")
+
+            # ── WORK ──
+            self._set_state("working", "")
+            self._set_action("claude is working...")
+            events: list[dict] = []
+            try:
+                for event in self.session.send(transcript):
+                    events.append(event)
+                    for line in _chat_event_lines(event):
+                        self._append_log(line)
+            except Exception as e:  # noqa: BLE001
+                self._append_log(f"[red]✗ claude error: {_escape(str(e))}[/red]")
+                self._set_state("idle", "")
+                self._set_action(f"error: {str(e)[:60]}")
+                continue
+
+            if self._stop_flag.is_set():
+                break
+
+            # ── SUMMARIZE + SPEAK ──
+            self._set_state("thinking", "")
+            self._set_action("summarizing...")
+            try:
+                summary = summarize_turn(transcript, events)
+            except Exception as e:  # noqa: BLE001
+                summary = f"Hit an error while summarizing: {e}"
+
+            if not summary:
+                summary = "Done."
+            self._append_log(f"[italic cyan]🎙 {_escape(summary)}[/italic cyan]")
+            self._set_state("talking", summary)
+            self._set_action("speaking")
+            speak(summary)
+
+            self._set_state("idle", "")
+
+        self._set_action("bye")
+
+    # ─── Main-thread helpers ───────────────────────────────────────────────
+
+    def _call(self, fn, *args, **kwargs) -> None:
+        # Same pattern as PresentApp: let exceptions propagate via Textual.
+        try:
+            self.call_from_thread(fn, *args, **kwargs)
+        except Exception:  # pragma: no cover — app shutting down
+            pass
+
+    def _set_state(self, state: State, narration: str = "") -> None:
+        def _apply() -> None:
+            char = self.query_one(CharacterPanel)
+            char.state = state
+            char.narration = narration
+
+        self._call(_apply)
+
+    def _set_progress(self, text: str) -> None:
+        self._call(lambda: setattr(self.query_one(StatusBar), "progress", text))
+
+    def _set_action(self, text: str) -> None:
+        self._call(lambda: setattr(self.query_one(StatusBar), "action", text))
+
+    def _append_log(self, line: str) -> None:
+        self._call(lambda: self.query_one(ActivityLog).write(line))
+
+
+def _chat_event_lines(event: dict) -> list[str]:
+    # Local import to avoid a top-of-module circular reference with chat.py.
+    from .chat import event_to_log_lines
+
+    return event_to_log_lines(event)
+
+
+def _escape(text: str) -> str:
+    return text.replace("[", r"\[").replace("]", r"\]")
+
+
 # ─── Standalone demo: cycle through character states ─────────────────────
 
 
 class _CharacterDemoApp(App):
-    """Tiny app that rotates the character through all four states on a timer.
+    """Tiny app that rotates the character through all states on a timer.
 
     Useful for eyeballing the ASCII art without wiring up audio. Run with:
         python -m claude_zoom.tui
@@ -522,7 +732,7 @@ class _CharacterDemoApp(App):
     }
     """
 
-    _STATES: list[State] = ["idle", "talking", "listening", "thinking"]
+    _STATES: list[State] = ["idle", "talking", "listening", "thinking", "working"]
 
     def compose(self) -> ComposeResult:
         yield CharacterPanel(id="character")

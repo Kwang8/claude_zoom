@@ -26,6 +26,66 @@ def main() -> None:
     load_dotenv()
 
 
+@main.command()
+@click.option(
+    "--cwd",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Working directory for the Claude subprocess (default: current).",
+)
+@click.option(
+    "--model",
+    default="opus",
+    show_default=True,
+    help="Model the slow layer uses.",
+)
+@click.option(
+    "--permission-mode",
+    default="acceptEdits",
+    show_default=True,
+    type=click.Choice(
+        ["default", "acceptEdits", "bypassPermissions", "dontAsk", "plan"]
+    ),
+    help="Passed through to claude -p. bypassPermissions is full-trust YOLO.",
+)
+@click.option(
+    "--append-system-prompt",
+    default=None,
+    help="Override the default voice-friendly append-system-prompt for Claude.",
+)
+def chat(cwd, model, permission_mode, append_system_prompt) -> None:
+    """Voice-chat with a live Claude Code instance.
+
+    Listens on your mic, sends your spoken request to a live `claude -p`
+    session, streams tool calls and results into a TUI activity log, and
+    speaks a short summary of each turn. Session is preserved across turns
+    via --resume, so you can have a real conversation.
+    """
+    try:
+        from .voice import warm_up
+    except ImportError as e:
+        raise click.ClickException(
+            f"Voice deps not installed. Run: pip install -e '.[voice]'\n  ({e})"
+        ) from e
+
+    click.echo("Loading Parakeet (first run downloads ~600MB)...")
+    warm_up()
+    click.echo("  Ready.\n")
+
+    from .chat import ClaudeSession
+    from .tui import ChatApp
+
+    kwargs = dict(
+        cwd=cwd,
+        model=model,
+        permission_mode=permission_mode,
+    )
+    if append_system_prompt:
+        kwargs["append_system_prompt"] = append_system_prompt
+    session = ClaudeSession(**kwargs)
+    ChatApp(session).run()
+
+
 def _fetch_change(ref: str) -> ChangeContext:
     """Resolve a user ref (PR #, SHA, or GitHub URL) to a ChangeContext."""
     kind, payload = parse_ref(ref)

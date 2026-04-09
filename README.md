@@ -1,16 +1,11 @@
 # claude_zoom
 
-Claude walks you through a PR or commit in your terminal as a series of narrated code snippets, then listens for spoken questions and answers them out loud — all local, no Discord, no cloud APIs.
+A voice interface to Claude Code, with a little animated ASCII character and a live activity log. Two modes:
 
-Point it at a PR number, a commit SHA, or a GitHub URL:
+- **`claude-zoom chat`** — voice-chat with a live Claude Code instance. Ask anything; Claude reads files, edits, runs bash, etc.; you hear a short spoken summary of each turn.
+- **`claude-zoom present <ref>`** — voice walkthrough of a specific PR or commit. Claude picks the important hunks and narrates each one, with voice Q&A between snippets.
 
-```bash
-claude-zoom present 42
-claude-zoom present 885fbd6
-claude-zoom present https://github.com/owner/repo/commit/885fbd6...
-```
-
-You get an interactive Textual TUI with a little animated ASCII character that reacts to state (talking / listening / thinking), the current code snippet on the right with syntax highlighting, macOS `say` for narration, and Parakeet running locally for speech-to-text.
+All local on macOS: Parakeet (speech-to-text), macOS `say` (text-to-speech, auto-detects premium voices), and `claude -p` (subprocess, reuses your Claude Code subscription — no API key).
 
 ![demo](docs/demo.png)
 <!-- no screenshot checked in yet — run `claude-zoom present <ref>` to see it -->
@@ -68,6 +63,39 @@ Key bindings inside the TUI:
 | `r` | Replay current narration |
 
 Pass `--plain` to fall back to a linear printer (no TUI, no character) — useful for small terminals or when stdout is being piped. Pass `--no-listen` to narrate without the Q&A loop.
+
+### Phase 3: chat mode — voice interface to a live Claude Code instance
+
+```bash
+cd /path/to/your/repo
+claude-zoom chat
+```
+
+This opens the same TUI but with an activity log panel on the right (instead of a code snippet) and an auto-cycling turn-based voice loop:
+
+1. Character goes to `listening`, records 6 seconds of your mic.
+2. Parakeet transcribes → the transcript shows in the log as `🎤 you: …`.
+3. Character goes to `working` and spawns `claude -p --output-format stream-json --verbose --resume <id>` under the hood.
+4. Every tool call, tool result, and assistant message streams into the activity log as it happens (`→ Read(login.tsx)`, `← 420 lines`, `💬 "I found the issue"`, `✓ done (3.4s)`).
+5. When Claude finishes, a fast-model (Haiku) layer summarizes the turn into one spoken sentence. If Claude's own final text is already crisp and short, it gets spoken verbatim (fast path, zero extra latency); otherwise Haiku rewrites it.
+6. Character flips to `talking`, speaks the summary, then back to `listening` for the next turn.
+
+Session memory is preserved across turns by capturing the session UUID from the first turn's `system.init` event and passing `--resume <uuid>` on every subsequent turn, so Claude remembers what you talked about a minute ago.
+
+| Key | Action |
+| --- | --- |
+| `q` | Quit |
+| `esc` | Cancel the current Claude turn (SIGTERM the subprocess) |
+
+Flags:
+
+```bash
+claude-zoom chat --cwd ~/some/repo               # start Claude in a specific dir
+claude-zoom chat --model sonnet                  # swap the slow model (default: opus)
+claude-zoom chat --permission-mode bypassPermissions   # full-trust YOLO mode
+```
+
+`--permission-mode acceptEdits` (the default) lets Claude edit files without prompting but may still gate destructive bash. `--permission-mode bypassPermissions` turns that off for a frictionless voice session — **only use it in a cwd you trust**, since there's no way to respond to permission prompts mid-turn.
 
 ### Character demo (no audio, no network)
 
