@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 
 from .pr import ChangeContext
 
-MODEL = "opus"  # alias resolved by the claude CLI to latest Opus
+MODEL = "sonnet"  # alias resolved by the claude CLI to latest Sonnet
 MAX_DIFF_CHARS = 60_000
 
 

@@ -18,6 +18,7 @@ voice = [
     "numpy>=1.26.0",
     "soundfile>=0.12.1",
     "textual>=0.80.0",
+    "edge-tts>=6.1.9",
 ]
 
 [project.scripts]
