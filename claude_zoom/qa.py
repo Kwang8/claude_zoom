@@ -8,7 +8,8 @@ import subprocess
 from .pr import ChangeContext
 from .snippets import MAX_DIFF_CHARS, SnippetWalkthrough
 
-MODEL = "opus"
+MODEL = "haiku"  # Q&A is conversational turn-taking — latency > reasoning depth.
+                 # Snippet extraction (snippets.py) still uses Opus.
 
 
 SYSTEM_PROMPT_TEMPLATE = """\

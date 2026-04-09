@@ -81,18 +81,42 @@ Rotates through idle / talking / listening / thinking every 3 seconds.
 
 ### Tweaking the voice
 
-`say` ships with dozens of voices. List them:
+By default `claude_zoom` auto-picks the best installed voice in this order:
+
+1. `Siri Voice 1-5` (if you've downloaded any)
+2. Any voice tagged `(Premium)` (e.g. `Ava (Premium)`, `Zoe (Premium)`)
+3. Any voice tagged `(Enhanced)`
+4. `Ava`, `Zoe`, `Evan`
+5. `Samantha` (always installed, safe fallback)
+6. `Daniel` (British fallback)
+
+It runs at 190 wpm (vs macOS default of ~175) for a snappier conversational feel.
+
+**For a dramatic quality jump**, download a premium voice:
+
+> System Settings → Accessibility → Spoken Content → System Voice →
+> **Manage Voices** → scroll to English → download a **Siri Voice** or
+> any voice marked **(Premium)**.
+
+Once installed, `claude_zoom` picks it up automatically the next time you run `present`. You can also pin a specific voice:
 
 ```bash
-say -v '?'
+export CLAUDE_ZOOM_SAY_VOICE="Ava (Premium)"
+export CLAUDE_ZOOM_SAY_RATE=200              # words per minute (default 190)
 ```
 
-Then pick one and stick it in your env:
+List all installed voices with `say -v '?'`.
 
-```bash
-export CLAUDE_ZOOM_SAY_VOICE=Samantha       # or Daniel, Karen, Alex, ...
-export CLAUDE_ZOOM_SAY_RATE=180             # words per minute (default ~175)
-```
+### Model routing
+
+Two different Claude models are used via the local `claude -p` CLI, picked for the job:
+
+| Stage | Model | Why |
+| --- | --- | --- |
+| Walkthrough extraction (one-time, up front) | Opus 4.6 | Reasoning-heavy: pick the 3-4 most important hunks from a diff, write narrations. Runs once per `present`, latency doesn't matter. |
+| Q&A answers (during conversation) | Haiku 4.5 | Short, fast, conversational. Drops turn-taking latency from ~10s to ~2s. |
+
+Both reuse your Claude Code subscription auth — no API key, no cost beyond your normal subscription usage.
 
 ## Testing instructions
 

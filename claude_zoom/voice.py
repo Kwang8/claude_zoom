@@ -1,7 +1,13 @@
 """Local TTS and STT for the terminal walkthrough.
 
-TTS: macOS `say` — zero deps, offline, free. Quality is meh but fine for
-dev tooling.
+TTS: macOS `say`. We auto-pick the best installed voice — prefer premium /
+enhanced / Siri neural voices, fall back to Samantha, then system default.
+The user can override with CLAUDE_ZOOM_SAY_VOICE. Speech rate is bumped
+slightly above the macOS default for a more conversational pace.
+
+For a dramatic quality upgrade, download a premium voice in:
+  System Settings → Accessibility → Spoken Content → System Voice → Manage
+  Voices → look for "Siri Voice 1-5" or entries marked (Premium).
 
 STT: parakeet-mlx (NVIDIA Parakeet ported to Apple Silicon MLX). Runs
 locally; first call downloads the model (~600MB) from Hugging Face and
@@ -13,8 +19,10 @@ Mic capture: sounddevice → int16 PCM → soundfile WAV → parakeet.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
+from functools import lru_cache
 from typing import Any
 
 # Module-level lazy cache for the parakeet model. Loading takes a few
@@ -24,23 +32,85 @@ _parakeet_model: Any | None = None
 
 PARAKEET_MODEL_ID = "mlx-community/parakeet-tdt-0.6b-v3"
 SAMPLE_RATE = 16000
-SAY_VOICE = os.environ.get("CLAUDE_ZOOM_SAY_VOICE")  # e.g. "Samantha", "Daniel"
-SAY_RATE = os.environ.get("CLAUDE_ZOOM_SAY_RATE")  # words per minute, default ~175
+DEFAULT_SAY_RATE = "190"  # words per minute; macOS default is ~175
+
+# Preference order for the default voice when CLAUDE_ZOOM_SAY_VOICE is unset.
+# We search `say -v '?'` output for each pattern in order and use the first
+# match. Premium / enhanced / Siri voices sound dramatically better than the
+# stock ones, so they rank first. Samantha is the safe last-resort fallback
+# that's installed on every macOS.
+_VOICE_PREFERENCES: list[re.Pattern[str]] = [
+    re.compile(r"^Siri Voice \d", re.IGNORECASE),
+    re.compile(r"\(Premium\)", re.IGNORECASE),
+    re.compile(r"\(Enhanced\)", re.IGNORECASE),
+    re.compile(r"^Ava\b", re.IGNORECASE),
+    re.compile(r"^Zoe\b", re.IGNORECASE),
+    re.compile(r"^Evan\b", re.IGNORECASE),
+    re.compile(r"^Samantha\b", re.IGNORECASE),
+    re.compile(r"^Daniel\b", re.IGNORECASE),
+]
+
+
+@lru_cache(maxsize=1)
+def _autodetect_voice() -> str | None:
+    """Return the best installed English `say` voice, or None if detection fails.
+
+    Cached at module level so we only shell out to `say -v '?'` once per run.
+    """
+    try:
+        out = subprocess.run(
+            ["say", "-v", "?"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+    except OSError:
+        return None
+
+    # Parse lines like:
+    #   "Samantha            en_US    # Hello! My name is Samantha."
+    #   "Ava (Premium)       en_US    # Hello! My name is Ava."
+    english: list[str] = []
+    for line in out.splitlines():
+        if " en_" not in line:
+            continue
+        # Voice name is everything before the locale code.
+        name = re.split(r"\s{2,}", line, maxsplit=1)[0].strip()
+        if name:
+            english.append(name)
+
+    for pattern in _VOICE_PREFERENCES:
+        for name in english:
+            if pattern.search(name):
+                return name
+    return english[0] if english else None
+
+
+def _resolve_voice() -> str | None:
+    """Look up the voice to use at call time (honors env var overrides)."""
+    env = os.environ.get("CLAUDE_ZOOM_SAY_VOICE")
+    if env:
+        return env
+    return _autodetect_voice()
+
+
+def _resolve_rate() -> str:
+    return os.environ.get("CLAUDE_ZOOM_SAY_RATE") or DEFAULT_SAY_RATE
 
 
 def speak(text: str) -> None:
     """Speak `text` through the default audio output via macOS `say`.
 
-    Blocks until playback finishes. Uses `CLAUDE_ZOOM_SAY_VOICE` and
-    `CLAUDE_ZOOM_SAY_RATE` env vars if set.
+    Blocks until playback finishes. Honors CLAUDE_ZOOM_SAY_VOICE and
+    CLAUDE_ZOOM_SAY_RATE; otherwise auto-picks the best installed voice
+    and uses a slightly snappier default rate.
     """
     if not text.strip():
         return
-    cmd = ["say"]
-    if SAY_VOICE:
-        cmd.extend(["-v", SAY_VOICE])
-    if SAY_RATE:
-        cmd.extend(["-r", SAY_RATE])
+    cmd = ["say", "-r", _resolve_rate()]
+    voice = _resolve_voice()
+    if voice:
+        cmd.extend(["-v", voice])
     cmd.append(text)
     subprocess.run(cmd, check=False)
 
