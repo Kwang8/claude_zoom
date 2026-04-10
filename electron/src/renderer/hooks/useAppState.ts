@@ -82,6 +82,7 @@ function reducer(state: State, action: Action): State {
 
     case "agent_spawned": {
       const filtered = state.agents.filter((a) => a.agent_id !== msg.agent_id);
+      const status = msg.status || "working";
       return {
         ...state,
         agents: [
@@ -91,7 +92,8 @@ function reducer(state: State, action: Action): State {
             name: msg.name,
             number: msg.number,
             task: msg.task,
-            status: msg.status || "working",
+            status,
+            started_at: status === "working" ? Date.now() : undefined,
           },
         ],
       };
@@ -102,7 +104,17 @@ function reducer(state: State, action: Action): State {
         ...state,
         agents: state.agents.map((a) =>
           a.agent_id === msg.agent_id
-            ? { ...a, status: msg.status, ticker: msg.ticker ?? a.ticker }
+            ? {
+                ...a,
+                status: msg.status,
+                ticker: msg.ticker ?? a.ticker,
+                started_at:
+                  msg.status === "working"
+                    ? a.status === "working"
+                      ? a.started_at
+                      : Date.now()
+                    : undefined,
+              }
             : a
         ),
       };

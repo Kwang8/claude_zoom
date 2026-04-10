@@ -208,6 +208,13 @@
   flex: 1;
 }
 
+.agent-timer {
+  font-size: 11px;
+  color: var(--accent-cyan);
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
 .agent-delete {
   background: none;
   border: none;

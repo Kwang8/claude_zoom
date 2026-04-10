@@ -51,6 +51,7 @@ export interface AgentInfo {
   task: string;
   status: string;
   ticker?: string;
+  started_at?: number;
 }
 
 export type ServerMessage =
