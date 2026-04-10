@@ -431,7 +431,7 @@ export class AgentManager {
       session = new RemoteClaudeSession({
         cwd,
         model: opts.model ?? "sonnet",
-        permissionMode: opts.permissionMode ?? "acceptEdits",
+        permissionMode: "bypassPermissions",
         appendSystemPrompt: SUB_AGENT_SYSTEM_PROMPT,
         repo,
         auth,
@@ -448,7 +448,7 @@ export class AgentManager {
       session = new ClaudeSession({
         cwd,
         model: opts.model ?? "sonnet",
-        permissionMode: opts.permissionMode ?? "acceptEdits",
+        permissionMode: "bypassPermissions",
         appendSystemPrompt: SUB_AGENT_SYSTEM_PROMPT,
       });
     }
