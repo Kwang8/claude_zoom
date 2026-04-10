@@ -24,7 +24,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.reactive import reactive
-from textual.widgets import Header, Input, Label, Static, TextArea
+from textual.widgets import Header, Label, Static, TextArea
 
 if TYPE_CHECKING:
     from .chat import ClaudeSession
@@ -785,17 +785,11 @@ class ChatApp(App):
         width: 1fr;
         height: 1fr;
     }
-    #chat-input {
-        dock: bottom;
-        height: 3;
-        border: round $accent;
-    }
     """
 
     BINDINGS = [
         Binding("q", "quit", "quit"),
         Binding("space", "toggle_mic", "mic", priority=True),
-        Binding("tab", "toggle_keyboard", "keyboard", priority=True),
         Binding("escape", "cancel_turn", "cancel turn"),
     ]
 
@@ -810,10 +804,6 @@ class ChatApp(App):
         # Set when the main input loop is idle (waiting for mic press).
         # The speech consumer only plays sub-agent summaries when this is set.
         self._main_idle = threading.Event()
-        # Keyboard input: set when user submits text via Enter.
-        self._keyboard_input: str | None = None
-        self._keyboard_event = threading.Event()
-        self._keyboard_mode = False
         # PR decision routing.
         self._awaiting_pr_agent_id: str | None = None
 
@@ -829,14 +819,14 @@ class ChatApp(App):
             with Vertical(id="main-area"):
                 yield TranscriptView(id="transcript")
                 yield ActivityTicker(id="ticker")
-        yield Input(placeholder="type a message... (Tab to switch to voice)", id="chat-input")
+
         yield StatusBar(id="status")
 
     def on_mount(self) -> None:
         self.title = "claude_zoom · chat"
         self.sub_title = f"cwd: {self.session.cwd or '.'}"
         status = self.query_one(StatusBar)
-        status.hint = "q quit · space talk · tab keyboard · esc cancel"
+        status.hint = "q quit · space talk · esc cancel"
         status.progress = "booting"
         status.action = "warming up"
         # Start the speech consumer that plays sub-agent summaries.
@@ -849,29 +839,6 @@ class ChatApp(App):
     # ─── Key actions ───────────────────────────────────────────────────────
 
     def action_toggle_mic(self) -> None:
-        if not self._keyboard_mode:
-            self._mic_event.set()
-
-    def action_toggle_keyboard(self) -> None:
-        self._keyboard_mode = not self._keyboard_mode
-        chat_input = self.query_one("#chat-input", Input)
-        if self._keyboard_mode:
-            chat_input.add_class("visible")
-            chat_input.focus()
-            self.query_one(StatusBar).action = "keyboard mode — type and press Enter"
-        else:
-            chat_input.remove_class("visible")
-            self.query_one(StatusBar).action = "voice mode — press SPACE to talk"
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle Enter key in the keyboard input."""
-        text = event.value.strip()
-        if not text:
-            return
-        event.input.clear()
-        self._keyboard_input = text
-        self._keyboard_event.set()
-        # Also trigger mic_event so the wait loop unblocks.
         self._mic_event.set()
 
     def action_cancel_turn(self) -> None:
@@ -885,7 +852,6 @@ class ChatApp(App):
     async def action_quit(self) -> None:  # type: ignore[override]
         self._stop_flag.set()
         self._mic_event.set()
-        self._keyboard_event.set()
         self.session.cancel()
         self._agent_manager.kill_all()
         self.exit()
@@ -914,68 +880,52 @@ class ChatApp(App):
 
         turn = 0
         while not self._stop_flag.is_set():
-            # ── IDLE: wait for input (voice or keyboard) ──
+            # ── IDLE: wait for mic press ──
             self._set_ticker("")
             self._set_state("idle", "")
             self._set_progress(f"turn {turn}" if turn else "ready")
-            self._set_action(
-                "keyboard mode — type and press Enter"
-                if self._keyboard_mode
-                else "press SPACE to talk"
-            )
+            self._set_action("press SPACE to talk")
             self._main_idle.set()
             if not self._wait_for_input():
                 break
             self._main_idle.clear()
 
-            # ── GET TRANSCRIPT (voice or keyboard) ──
-            transcript: str | None = None
+            # ── LISTEN ──
+            turn += 1
+            self._cancel_recording.clear()
+            self._set_state("listening", "")
+            self._set_progress(f"turn {turn}")
+            self._set_action("recording — press SPACE to send")
+            play_sound("ready")
+            recorder = Recorder()
 
-            # Check if keyboard input arrived.
-            if self._keyboard_event.is_set():
-                self._keyboard_event.clear()
-                transcript = self._keyboard_input
-                self._keyboard_input = None
-            elif not self._keyboard_mode:
-                # Voice path: record until space pressed again.
-                turn += 1
+            try:
+                recorder.start()
+            except Exception as e:  # noqa: BLE001
+                self._set_action(f"mic error: {str(e)[:60]}")
+                self._set_state("idle", "")
+                continue
+
+            if not self._wait_for_input():
+                recorder.close()
+                break
+
+            # Escape was pressed during recording — discard audio, do not send.
+            if self._cancel_recording.is_set():
                 self._cancel_recording.clear()
-                self._set_state("listening", "")
-                self._set_progress(f"turn {turn}")
-                self._set_action("recording — press SPACE to send")
-                play_sound("ready")
-                recorder = Recorder()
+                recorder.close()
+                self._set_state("idle", "")
+                self._set_action("cancelled")
+                continue
 
-                try:
-                    recorder.start()
-                except Exception as e:  # noqa: BLE001
-                    self._set_action(f"mic error: {str(e)[:60]}")
-                    self._set_state("idle", "")
-                    continue
-
-                if not self._wait_for_input():
-                    recorder.close()
-                    break
-
-                # Drain any keyboard event that fired during recording.
-                self._keyboard_event.clear()
-
-                # Escape was pressed during recording — discard audio, do not send.
-                if self._cancel_recording.is_set():
-                    self._cancel_recording.clear()
-                    recorder.close()
-                    self._set_state("idle", "")
-                    self._set_action("cancelled")
-                    continue
-
-                self._set_state("thinking", "")
-                self._set_action("transcribing...")
-                try:
-                    transcript = recorder.stop_and_transcribe()
-                except Exception as e:  # noqa: BLE001
-                    self._set_action(f"transcribe error: {str(e)[:60]}")
-                    self._set_state("idle", "")
-                    continue
+            self._set_state("thinking", "")
+            self._set_action("transcribing...")
+            try:
+                transcript = recorder.stop_and_transcribe()
+            except Exception as e:  # noqa: BLE001
+                self._set_action(f"transcribe error: {str(e)[:60]}")
+                self._set_state("idle", "")
+                continue
 
             if not transcript:
                 self._set_action("(no input)")
@@ -1200,13 +1150,11 @@ class ChatApp(App):
     # ─── Push-to-talk helpers ─────────────────────────────────────────────
 
     def _wait_for_input(self) -> bool:
-        """Block until mic press, keyboard submit, or app stop."""
+        """Block until mic press or app stop."""
         while not self._stop_flag.is_set():
             if self._mic_event.is_set():
                 self._mic_event.clear()
                 return True
-            if self._keyboard_event.is_set():
-                return True  # don't clear — chat loop reads it
             time.sleep(0.05)
         return False
 
