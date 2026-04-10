@@ -458,10 +458,20 @@ class AgentManager:
                     except Exception:  # noqa: BLE001
                         pass
 
-    def handle_pr_decision(self, agent_id: str, approved: bool) -> str | None:
+    def handle_pr_decision(
+        self, agent_id: str, approved: bool, *, cleanup: bool = True
+    ) -> str | None:
         """Handle user's yes/no response to the PR prompt.
 
         Returns the PR URL if approved and created, else None.
+
+        Parameters
+        ----------
+        cleanup:
+            If True (default), delete the worktree immediately after handling
+            the decision.  Pass False when you intend to ask the user about
+            worktree deletion separately — then call
+            ``cleanup_worktree_for_agent`` when ready.
         """
         with self._lock:
             agent = self.agents.get(agent_id)
@@ -473,9 +483,18 @@ class AgentManager:
             pr_url = create_pr(agent, agent.branch)
 
         agent.status = "done"
-        if agent.worktree_path is not None:
+        if cleanup and agent.worktree_path is not None:
             cleanup_worktree(agent.base_cwd, agent.worktree_path)
         return pr_url
+
+    def cleanup_worktree_for_agent(self, agent_id: str) -> None:
+        """Delete the worktree for *agent_id* if it still exists."""
+        with self._lock:
+            agent = self.agents.get(agent_id)
+        if agent is None or agent.worktree_path is None:
+            return
+        cleanup_worktree(agent.base_cwd, agent.worktree_path)
+        agent.worktree_path = None
 
     def resolve_agent_ref(self, ref: str) -> AgentInstance | None:
         """Find an agent by name or number (e.g. "2" → sub-2, "researcher" → name match)."""

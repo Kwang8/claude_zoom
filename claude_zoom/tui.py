@@ -806,6 +806,8 @@ class ChatApp(App):
         self._main_idle = threading.Event()
         # PR decision routing.
         self._awaiting_pr_agent_id: str | None = None
+        # Worktree delete decision routing (set after a PR is successfully created).
+        self._awaiting_delete_agent_id: str | None = None
 
         from .agents import AgentManager, SpeechQueue
 
@@ -937,6 +939,21 @@ class ChatApp(App):
             self._append_message("user", transcript)
             self._set_action(f"heard: {transcript[:60]}")
 
+            # ── WORKTREE DELETE DECISION ROUTING ──
+            if self._awaiting_delete_agent_id:
+                agent_id = self._awaiting_delete_agent_id
+                self._awaiting_delete_agent_id = None
+                lower = transcript.lower()
+                if any(w in lower for w in ("yes", "yeah", "yep", "sure", "do it", "delete", "remove", "clean")):
+                    self._set_action("deleting worktree...")
+                    self._agent_manager.cleanup_worktree_for_agent(agent_id)
+                    ack = "Worktree deleted."
+                else:
+                    ack = "Worktree kept. You can find it in .claude_zoom_agents."
+                self._append_message("claude", ack)
+                self._speak_main(ack)
+                continue
+
             # ── PR DECISION ROUTING ──
             if self._awaiting_pr_agent_id:
                 agent_id = self._awaiting_pr_agent_id
@@ -944,13 +961,21 @@ class ChatApp(App):
                 lower = transcript.lower()
                 if any(w in lower for w in ("yes", "yeah", "yep", "sure", "do it", "open")):
                     self._set_action("creating PR...")
-                    pr_url = self._agent_manager.handle_pr_decision(agent_id, True)
+                    pr_url = self._agent_manager.handle_pr_decision(agent_id, True, cleanup=False)
                     if pr_url:
-                        ack = f"PR created: {pr_url}"
+                        pr_ack = f"PR created: {pr_url}"
+                        self._append_message("claude", pr_ack)
+                        self._speak_main(pr_ack)
+                        # Ask about worktree deletion now that the PR URL is shown.
+                        delete_prompt = "Want me to delete the local worktree?"
+                        self._append_message("claude", delete_prompt)
+                        self._speak_main(delete_prompt)
+                        self._awaiting_delete_agent_id = agent_id
                     else:
                         ack = "Failed to create PR. Branch is still pushed."
-                    self._append_message("claude", ack)
-                    self._speak_main(ack)
+                        self._agent_manager.cleanup_worktree_for_agent(agent_id)
+                        self._append_message("claude", ack)
+                        self._speak_main(ack)
                 else:
                     ack = "OK, branch is pushed if you want it later."
                     self._agent_manager.handle_pr_decision(agent_id, False)
