@@ -58,6 +58,7 @@ function reducer(state: State, action: Action): State {
             role: msg.role,
             text: msg.text,
             agent_name: msg.agent_name,
+            agent_id: msg.agent_id,
             timestamp: msg.timestamp,
           },
         ],

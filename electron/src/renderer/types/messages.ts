@@ -25,6 +25,7 @@ export interface TranscriptMessage {
   role: "user" | "claude" | "sub_agent" | "system" | "claude_error";
   text: string;
   agent_name?: string;
+  agent_id?: string;
   timestamp: string;
 }
 

@@ -11,6 +11,7 @@ export function App() {
   const { state, handleMessage } = useAppState();
   const { send, connected } = useIPC(handleMessage);
   const [isRecording, setIsRecording] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -27,6 +28,7 @@ export function App() {
       if (e.code === "Space") {
         e.preventDefault();
         if (e.repeat) return;
+        setSelectedAgentId(null);
         console.log("[app] space pressed, sending mic_start");
         setIsRecording(true);
         send({ type: "mic_start" });
@@ -49,11 +51,11 @@ export function App() {
       }
     }
 
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("keyup", onKeyUp, true);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("keyup", onKeyUp, true);
     };
   }, [send]);
 
@@ -64,6 +66,17 @@ export function App() {
     [send]
   );
 
+  useEffect(() => {
+    if (selectedAgentId && !state.agents.some((agent) => agent.agent_id === selectedAgentId)) {
+      setSelectedAgentId(null);
+    }
+  }, [selectedAgentId, state.agents]);
+
+  const selectedAgent = state.agents.find((agent) => agent.agent_id === selectedAgentId) || null;
+  const visibleTranscript = selectedAgent
+    ? state.transcript.filter((message) => message.agent_id === selectedAgent.agent_id)
+    : state.transcript;
+
   return (
     <div className="app">
       <div className="titlebar">claude_zoom</div>
@@ -72,10 +85,16 @@ export function App() {
           appState={state.appState}
           narration={state.narration}
           agents={state.agents}
+          selectedAgentId={selectedAgentId}
+          onSelectAgent={setSelectedAgentId}
           onDeleteAgent={handleDeleteAgent}
         />
         <div className="main-area">
-          <TranscriptView messages={state.transcript} />
+          <TranscriptView
+            messages={visibleTranscript}
+            selectedAgent={selectedAgent}
+            onBackToMain={() => setSelectedAgentId(null)}
+          />
           <ActivityTicker activity={state.ticker} />
         </div>
       </div>

@@ -5,8 +5,12 @@ import path from "path";
 const DEFAULT_EDGE_VOICE = "en-US-EmmaMultilingualNeural";
 const DEFAULT_SAY_RATE = 190;
 
-function findProjectRoot(): string {
+function findElectronRoot(): string {
   return path.resolve(__dirname, "..", "..");
+}
+
+function findWorkspaceRoot(): string {
+  return path.resolve(__dirname, "..", "..", "..");
 }
 
 function resolveVoice(): string {
@@ -149,7 +153,7 @@ export function playSound(name: string): void {
 export function speakAsync(text: string): ChildProcess | null {
   if (!text.trim()) return null;
   return spawn(process.execPath, ["--input-type=module", "-e", EDGE_TTS_HELPER_SCRIPT, text], {
-    cwd: findProjectRoot(),
+    cwd: findElectronRoot(),
     stdio: ["ignore", "ignore", "ignore"],
     env: {
       ...process.env,
@@ -227,7 +231,7 @@ for line in sys.stdin:
 
 function findPython(): string | null {
   // Look for the project venv — 3 levels up from dist/main/
-  const projectRoot = findProjectRoot();
+  const projectRoot = findWorkspaceRoot();
   const venvPython = path.join(projectRoot, ".venv", "bin", "python3");
   if (fs.existsSync(venvPython)) return venvPython;
   return null;

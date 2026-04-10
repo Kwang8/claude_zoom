@@ -34,11 +34,16 @@ function statePath(cwd: string): string {
 
 export function saveState(state: AppState, cwd: string): void {
   const p = statePath(cwd);
+  const tmp = `${p}.tmp`;
   try {
     fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify(state, null, 2));
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+    fs.renameSync(tmp, p);
   } catch (e) {
     console.warn("[state] failed to save:", e);
+    try {
+      fs.unlinkSync(tmp);
+    } catch {}
   }
 }
 
@@ -46,7 +51,9 @@ export function loadState(cwd: string): AppState | null {
   const p = statePath(cwd);
   if (!fs.existsSync(p)) return null;
   try {
-    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    const raw = fs.readFileSync(p, "utf-8");
+    if (!raw.trim()) return null;
+    const data = JSON.parse(raw);
     return {
       main_session_id: data.main_session_id ?? null,
       main_model: data.main_model ?? "opus",

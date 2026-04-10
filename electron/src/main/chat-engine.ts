@@ -156,12 +156,13 @@ export class ChatEngine {
     this._send("state_change", { state, narration });
   }
 
-  private _sendTranscript(role: string, text: string, agentName: string = ""): void {
+  private _sendTranscript(role: string, text: string, agentName: string = "", agentId: string = ""): void {
     const msg: Record<string, any> = {
       type: "transcript_message",
       role,
       text,
       agent_name: agentName,
+      agent_id: agentId,
       timestamp: new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" }),
     };
     this._transcriptLog.push(msg);
@@ -603,7 +604,7 @@ export class ChatEngine {
       if (this._stopFlag.isSet()) break;
 
       playSound("done");
-      this._sendTranscript("sub_agent", item.text, item.label);
+      this._sendTranscript("sub_agent", item.text, item.label, item.agentId || "");
       this._sendState("talking", item.text);
       this._sendAction(`speaking: ${item.label}`);
 
