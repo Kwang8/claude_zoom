@@ -5,6 +5,7 @@ import { ChatEngine } from "./chat-engine";
 
 let mainWindow: BrowserWindow | null = null;
 let engine: ChatEngine | null = null;
+const DEV_SERVER_URL = "http://localhost:5173";
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -24,7 +25,7 @@ async function createWindow() {
   // In dev, load from Vite dev server; in prod, load the built file
   const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
   if (isDev) {
-    mainWindow.loadURL("http://localhost:5173");
+    await loadDevRenderer(mainWindow);
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
@@ -109,6 +110,20 @@ async function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+}
+
+async function loadDevRenderer(window: BrowserWindow): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await window.loadURL(DEV_SERVER_URL);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Failed to load Vite dev server");
 }
 
 app.whenReady().then(createWindow);
