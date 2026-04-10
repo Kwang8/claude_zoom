@@ -811,9 +811,12 @@ class ChatApp(App):
         self._last_sub_speaker_id: str | None = None
 
         from .agents import AgentManager, SpeechQueue
+        from .coordinator import CoordinatorAgent
 
         self._speech_queue = SpeechQueue()
         self._agent_manager = AgentManager(self._speech_queue)
+        # Hidden Opus coordinator that tracks agent state and advises routing.
+        self._coordinator = CoordinatorAgent(session.cwd or ".")
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -1002,6 +1005,34 @@ class ChatApp(App):
                     continue
                 # ref didn't match any agent — fall through to main agent
 
+            # ── COORDINATOR: consult routing coordinator if any agents exist ──
+            coordinator_context = ""
+            if self._agent_manager.all_agents:
+                self._set_action("consulting coordinator...")
+                suggestion = self._coordinator.advise(
+                    transcript, self._agent_manager.all_agents
+                )
+                coordinator_context = suggestion.advice
+                if suggestion.agent_id:
+                    coord_agent = self._agent_manager.agents.get(suggestion.agent_id)
+                    if coord_agent:
+                        if coord_agent.status == "working":
+                            coord_agent.task_queue.append(transcript)
+                            ack = f"Queued for agent {coord_agent.name} (coordinator)."
+                        else:
+                            self._agent_manager.send_to_agent(
+                                coord_agent, transcript,
+                                on_event=self._on_sub_event,
+                                on_done=self._on_sub_done,
+                            )
+                            self._call(
+                                lambda a=coord_agent: self._update_agent_panel(a.id, "working")
+                            )
+                            ack = f"Routed to agent {coord_agent.name} (coordinator)."
+                        self._append_message("claude", ack)
+                        self._speak_main(ack)
+                        continue
+
             # ── SMART ROUTING: did a sub-agent just speak? ──
             if last_sub_id:
                 agent = self._agent_manager.agents.get(last_sub_id)
@@ -1029,6 +1060,11 @@ class ChatApp(App):
             # ── WORK (main agent) ──
             # Speak Claude's first text response immediately while tool
             # calls keep streaming, so the user doesn't wait.
+            # If the coordinator provided context, prepend it to the prompt
+            # so the main agent is aware of what's happening in the system.
+            _prompt = transcript
+            if coordinator_context:
+                _prompt = f"[Coordinator context: {coordinator_context}]\n{transcript}"
             self._set_state("working", "")
             self._set_action("claude is working...")
             events: list[dict] = []
@@ -1036,7 +1072,7 @@ class ChatApp(App):
             early_text: str = ""
             has_tool_calls = False
             try:
-                for event in self.session.send(transcript):
+                for event in self.session.send(_prompt):
                     events.append(event)
                     if event.get("type") == "assistant":
                         content = (event.get("message") or {}).get("content") or []
@@ -1218,6 +1254,7 @@ class ChatApp(App):
 
         self._call(_mount)
         self._append_message("system", f"spawned agent \"{name}\"")
+        self._coordinator.notify_spawn(agent.id, agent.name, task)
 
     def _on_sub_event(self, agent_id: str, event: dict) -> None:
         """Called from a sub-agent thread on each stream-json event."""
@@ -1245,6 +1282,11 @@ class ChatApp(App):
 
     def _on_sub_done(self, agent_id: str) -> None:
         """Called when a sub-agent finishes or errors."""
+        agent = self._agent_manager.agents.get(agent_id)
+        if agent:
+            self._coordinator.notify_done(
+                agent_id, agent.name, agent.task, agent.status
+            )
         self._call(lambda: self._update_agent_panel(agent_id))
 
     def _update_agent_panel(self, agent_id: str, force_state: str | None = None) -> None:
