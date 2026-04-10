@@ -168,6 +168,17 @@ class ChatEngine:
         self._transcript_log.append(msg)
         self._emit(msg)
 
+    def _is_welcome_back_message(self, msg: dict[str, Any] | None) -> bool:
+        if not msg:
+            return False
+        if msg.get("type") != "transcript_message" or msg.get("role") != "claude":
+            return False
+        text = msg.get("text")
+        return (
+            isinstance(text, str)
+            and text.startswith("Welcome back! Resumed previous session")
+        )
+
     def _send_ticker(self, activity: str) -> None:
         self._send("ticker_update", activity=activity)
 
@@ -285,14 +296,16 @@ class ChatEngine:
         intro: str | None = None
         if self._resume:
             intro = self._restore_state()
-        if not intro:
+        if intro is None:
             intro = (
                 "Hey! Press space to talk. "
                 "You can spin off sub-agents and talk to them by name or number."
             )
-        self._send_transcript("claude", intro)
+        if intro:
+            self._send_transcript("claude", intro)
         self._send_progress("ready")
-        self._speak(intro)
+        if intro:
+            self._speak(intro)
         self._mic_event.clear()
 
         turn = 0
@@ -789,11 +802,15 @@ class ChatEngine:
         n = len(state.agents)
         names = ", ".join(a.name for a in state.agents)
         if n:
-            return (
+            intro = (
                 f"Welcome back! Resumed previous session with {n} "
                 f"agent{'s' if n != 1 else ''}: {names}. Press space to talk."
             )
-        return "Welcome back! Resumed previous session. Press space to talk."
+        else:
+            intro = "Welcome back! Resumed previous session. Press space to talk."
+        if self._is_welcome_back_message(state.messages[-1] if state.messages else None):
+            return ""
+        return intro
 
 
 # ─── WebSocket server ────────────────────────────────────────────────────
