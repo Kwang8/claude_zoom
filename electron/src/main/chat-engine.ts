@@ -281,6 +281,40 @@ export class ChatEngine {
     this._micEvent.set();
   }
 
+  async compactConversation(): Promise<void> {
+    if (!this._currentConvId || this._convMessages.length < 1) return;
+
+    const convId = this._currentConvId;
+    const timestamp = new Date().toLocaleTimeString("en-US", {
+      hour12: false, hour: "2-digit", minute: "2-digit",
+    });
+
+    // Generate summary from conversation messages
+    let summary = "Conversation compacted by user";
+    try {
+      const result = await checkConversationComplete(this._convMessages);
+      if (result.summary) summary = result.summary;
+    } catch {}
+
+    const conv = this._convLog.find((c) => c.id === convId);
+    if (conv) {
+      conv.status = "compacted";
+      conv.summary = summary;
+      conv.end_timestamp = timestamp;
+    }
+    this._send("conversation_compacted", {
+      conversation_id: convId,
+      summary,
+      timestamp,
+    });
+    this._currentConvId = null;
+    this._convMessages = [];
+    this._scheduleStateSave();
+
+    const msg = "Conversation compacted.";
+    this._sendTranscript("claude", msg);
+  }
+
   prDecision(agentId: string, approved: boolean): void {
     const prUrl = this._agentManager.handlePrDecision(agentId, approved);
     let ack: string;
@@ -447,7 +481,6 @@ export class ChatEngine {
         this._sendTranscript("user", text);
         this._sendAction(`text: ${text.slice(0, 60)}`);
         await this._processUserInput(text, turn);
-        this._checkCompaction().catch(() => {});
         continue;
       }
 
@@ -504,7 +537,6 @@ export class ChatEngine {
       this._sendTranscript("user", transcript);
       this._sendAction(`heard: ${transcript.slice(0, 60)}`);
       await this._processUserInput(transcript, turn);
-      this._checkCompaction().catch(() => {});
     }
 
     this._sendAction("bye");
@@ -540,6 +572,13 @@ export class ChatEngine {
     if (this._awaitingQuestionAgentId) {
       const agentId = this._awaitingQuestionAgentId;
       this.agentAnswer(agentId, transcript);
+      return;
+    }
+
+    // USER-INITIATED COMPACTION
+    const lowerTrimmed = transcript.toLowerCase().trim();
+    if (lowerTrimmed === "compact" || lowerTrimmed === "/compact" || lowerTrimmed === "compact conversation") {
+      await this.compactConversation();
       return;
     }
 
@@ -644,7 +683,19 @@ export class ChatEngine {
     this._sendAction("tech lead is planning...");
     this._sendTicker("tech lead");
 
-    this._techLead.delegateTask(task).then((response) => {
+    this._techLead.delegateTask(task, (event) => {
+      // Stream TL tool calls to the UI ticker
+      if (event.type === "assistant") {
+        const content = event.message?.content || [];
+        for (const item of content) {
+          if (item.type === "tool_use") {
+            const tname = item.name || "?";
+            const short = summarizeToolArgs(tname, item.input || {});
+            this._sendTicker(`TL: ${tname}(${short})`);
+          }
+        }
+      }
+    }).then((response) => {
       console.log("[engine] TL responded:", JSON.stringify({
         spawns: response.spawns.length,
         escalation: !!response.escalation,
