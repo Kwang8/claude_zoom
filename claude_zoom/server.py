@@ -1,7 +1,7 @@
 """WebSocket server for the Electron frontend.
 
-Exposes the same chat orchestration logic as ``ChatApp`` in ``tui.py``
-but over a WebSocket so the Electron renderer can drive the UI.
+Contains the ``ChatEngine`` class with all chat orchestration logic,
+exposed over a WebSocket so the Electron renderer can drive the UI.
 
 Usage::
 
@@ -38,7 +38,7 @@ from .narrator import summarize_turn
 
 log = logging.getLogger("claude_zoom.server")
 
-# ─── Helpers (ported from tui.py) ────────────────────────────────────────
+# ─── Helpers ─────────────────────────────────────────────────────────────
 
 
 def _build_prompt_with_images(prompt: str, images: list[str]) -> str:
@@ -61,7 +61,7 @@ def _strip_spawn_markers(text: str) -> str:
     ).strip()
 
 
-# Agent naming (simplified from tui.py)
+# Agent naming
 _KEYWORD_CATEGORIES = [
     ({"search", "find", "look", "grep", "locate"}, "search"),
     ({"test", "spec", "check", "verify", "validate"}, "test"),
@@ -102,7 +102,7 @@ def _extract_agent_name(task: str) -> str:
 
 
 class ChatEngine:
-    """Core chat loop extracted from ChatApp, emitting events via callbacks.
+    """Core chat loop, emitting events via callbacks.
 
     The engine runs its main loop in a background thread. The caller wires
     up ``on_emit`` to forward events over WebSocket (or any other transport).

@@ -32,90 +32,6 @@ def main() -> None:
     "--cwd",
     type=click.Path(exists=True, file_okay=False),
     default=None,
-    help="Working directory for the Claude subprocess (default: current).",
-)
-@click.option(
-    "--model",
-    default="opus",
-    show_default=True,
-    help="Model the slow layer uses.",
-)
-@click.option(
-    "--permission-mode",
-    default="acceptEdits",
-    show_default=True,
-    type=click.Choice(
-        ["default", "acceptEdits", "bypassPermissions", "dontAsk", "plan"]
-    ),
-    help="Passed through to claude -p. bypassPermissions is full-trust YOLO.",
-)
-@click.option(
-    "--append-system-prompt",
-    default=None,
-    help="Override the default voice-friendly append-system-prompt for Claude.",
-)
-@click.option(
-    "--log-file",
-    default=None,
-    type=click.Path(),
-    help="Write debug logs to this file (e.g. claude_zoom.log).",
-)
-@click.option(
-    "--fresh",
-    is_flag=True,
-    default=False,
-    help="Start a fresh session instead of resuming the previous one.",
-)
-def chat(cwd, model, permission_mode, append_system_prompt, log_file, fresh) -> None:
-    """Voice-chat with a live Claude Code instance.
-
-    Listens on your mic, sends your spoken request to a live `claude -p`
-    session, streams tool calls and results into a TUI activity log, and
-    speaks a short summary of each turn. Session is preserved across turns
-    via --resume, so you can have a real conversation.
-    """
-    if log_file:
-        logging.basicConfig(
-            filename=log_file,
-            level=logging.DEBUG,
-            format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        )
-
-    try:
-        from .voice import warm_up
-    except ImportError as e:
-        raise click.ClickException(
-            f"Voice deps not installed. Run: pip install -e '.[voice]'\n  ({e})"
-        ) from e
-
-    click.echo("Loading Parakeet (first run downloads ~600MB)...")
-    warm_up()
-    click.echo("  Ready.\n")
-
-    from .chat import ClaudeSession
-    from .tui import ChatApp
-
-    kwargs = dict(
-        cwd=cwd,
-        model=model,
-        permission_mode=permission_mode,
-        tools="",  # Main agent is text-only; all work delegated via SPAWN
-    )
-    if append_system_prompt:
-        kwargs["append_system_prompt"] = append_system_prompt
-    if fresh:
-        from .state import clear_state
-        clear_state(cwd or ".")
-
-    session = ClaudeSession(**kwargs)
-    ChatApp(session, resume=not fresh).run()
-
-
-@main.command()
-@click.option(
-    "--cwd",
-    type=click.Path(exists=True, file_okay=False),
-    default=None,
     help="Working directory for the Claude subprocess.",
 )
 @click.option("--model", default="opus", show_default=True)
@@ -198,12 +114,7 @@ def generate(ref: str, dry_run: bool) -> None:
     default=True,
     help="Listen for a spoken question after each snippet (default on).",
 )
-@click.option(
-    "--plain",
-    is_flag=True,
-    help="Use the linear non-TUI renderer (no animated character).",
-)
-def present(ref: str, listen: bool, plain: bool) -> None:
+def present(ref: str, listen: bool) -> None:
     """Present REF interactively: print, narrate, and optionally Q&A.
 
     REF can be a PR number (42), a commit SHA (885fbd6), or a GitHub URL
@@ -229,18 +140,7 @@ def present(ref: str, listen: bool, plain: bool) -> None:
         warm_up()
         click.echo("  Ready.\n")
 
-    if plain:
-        _plain_present(change, walkthrough, listen=listen)
-        return
-
-    try:
-        from .tui import PresentApp
-    except ImportError as e:
-        raise click.ClickException(
-            f"TUI deps not installed. Run: pip install -e '.[voice]'\n  ({e})"
-        ) from e
-
-    PresentApp(change, walkthrough).run()
+    _plain_present(change, walkthrough, listen=listen)
 
 
 def _plain_present(change, walkthrough, *, listen: bool) -> None:  # type: ignore[no-untyped-def]

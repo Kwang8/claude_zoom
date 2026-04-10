@@ -17,7 +17,7 @@ The coordinator receives two kinds of messages:
    processed.  The coordinator responds with a structured ROUTE/ADVICE
    block that the Python layer parses into a ``CoordinatorSuggestion``.
 
-The caller (``ChatApp._run_chat_loop``) interprets the suggestion:
+The caller (``ChatEngine._run_chat_loop``) interprets the suggestion:
 - ``agent_id`` set → route the user message directly to that sub-agent
 - ``advice`` non-empty → inject as context into the main Claude prompt
 - timeout or error → fall through silently (suggestion stays "main")
