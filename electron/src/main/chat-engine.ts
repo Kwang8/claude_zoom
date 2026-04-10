@@ -135,6 +135,7 @@ export class ChatEngine {
   private _micEvent = new Signal();
   private _cancelRecording = new Signal();
   private _mainIdle = new Signal();
+  private _micHeld = false;
 
   // State
   private _transcriptLog: Record<string, any>[] = [];
@@ -240,10 +241,12 @@ export class ChatEngine {
   }
 
   micStart(): void {
+    this._micHeld = true;
     this._micEvent.set();
   }
 
   micStop(): void {
+    this._micHeld = false;
     this._micEvent.set();
   }
 
@@ -359,7 +362,7 @@ export class ChatEngine {
       this._cancelRecording.clear();
       this._sendState("listening");
       this._sendProgress(`turn ${turn}`);
-      this._sendAction("recording — press SPACE to send");
+      this._sendAction("recording — release SPACE to send");
       playSound("ready");
 
       if (!this._recorder?.ready) {
@@ -370,7 +373,12 @@ export class ChatEngine {
 
       this._recorder.startRecording();
 
-      if (!(await this._waitForInput())) break;
+      // Wait for space release (or cancel/stop)
+      while (this._micHeld && !this._stopFlag.isSet() && !this._cancelRecording.isSet()) {
+        this._micEvent.clear();
+        await Promise.race([this._micEvent.wait(), this._stopFlag.wait()]);
+      }
+      if (this._stopFlag.isSet()) break;
 
       if (this._cancelRecording.isSet()) {
         this._cancelRecording.clear();
