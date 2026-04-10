@@ -659,6 +659,7 @@ export class AgentManager {
     if ("close" in agent.session && typeof agent.session.close === "function") {
       void agent.session.close();
     }
+    this.agents.delete(agentId);
   }
 
   killAll(): void {
