@@ -37,6 +37,7 @@ export interface AppState {
   messages: Record<string, any>[];
   conversations?: ConversationData[];
   current_conversation_id?: string | null;
+  tech_lead_session_id?: string | null;
 }
 
 function statePath(cwd: string): string {
