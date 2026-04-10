@@ -1,17 +1,15 @@
-import { ClaudeSession, summarizeToolArgs } from "./claude-session";
+import { ClaudeSession, summarizeToolArgs, parseEMRoute, stripRouteBlocks } from "./claude-session";
 import {
   AgentInstance,
   AgentManager,
   SpeechQueue,
-  classifyMessageTarget,
   formatAgentDisplayName,
   inferGithubRepo,
   parseAgentTarget,
-  parseSpawnMarkers,
   parseVoiceTrigger,
 } from "./agent-manager";
-import { CoordinatorAgent } from "./coordinator";
-import { summarizeTurn, checkConversationComplete } from "./narrator";
+import { extractFinalText, checkConversationComplete } from "./narrator";
+import { TechLead } from "./tech-lead";
 import { RemoteClaudeSession } from "./remote-session";
 import { playSound, RecorderBridge, speakAsync } from "./voice";
 import { AppState, AgentState as AgentStateData, ConversationData, loadState, saveState } from "./state";
@@ -126,7 +124,7 @@ export class ChatEngine {
 
   private _speechQueue: SpeechQueue;
   private _agentManager: AgentManager;
-  private _coordinator: CoordinatorAgent;
+  private _techLead: TechLead;
   private _recorder: RecorderBridge | null = null;
   private _remoteRepo: string | null;
   private _remoteAuth: string;
@@ -142,6 +140,8 @@ export class ChatEngine {
   private _transcriptLog: Record<string, any>[] = [];
   private _awaitingPrAgentId: string | null = null;
   private _awaitingQuestionAgentId: string | null = null;
+  private _awaitingTLEscalation: string | null = null;
+  private _awaitingTLAgentId: string | null = null;
   private _lastSubSpeakerId: string | null = null;
   private _imageContext: string[] = [];
   private _pendingText: string | null = null;
@@ -166,7 +166,7 @@ export class ChatEngine {
 
     this._speechQueue = new SpeechQueue();
     this._agentManager = new AgentManager(this._speechQueue);
-    this._coordinator = new CoordinatorAgent(session.cwd || ".");
+    this._techLead = new TechLead(session.cwd || ".");
     this._remoteRepo = opts.remoteRepo ?? null;
     this._remoteAuth = opts.remoteAuth ?? "oauth";
   }
@@ -511,7 +511,6 @@ export class ChatEngine {
   }
 
   private async _processUserInput(transcript: string, _turn: number): Promise<void> {
-    const lastSubId = this._lastSubSpeakerId;
     this._lastSubSpeakerId = null;
 
     // PR DECISION ROUTING
@@ -524,31 +523,52 @@ export class ChatEngine {
       return;
     }
 
-    // AGENT QUESTION ROUTING
+    // TL ESCALATION RESPONSE
+    if (this._awaitingTLEscalation) {
+      const question = this._awaitingTLEscalation;
+      const agentId = this._awaitingTLAgentId;
+      this._awaitingTLEscalation = null;
+      this._awaitingTLAgentId = null;
+      this._handleTLEscalationResponse(question, agentId, transcript);
+      const ack = "Got it, passing that along.";
+      this._sendTranscript("claude", ack);
+      await this._speak(ack);
+      return;
+    }
+
+    // AGENT QUESTION ROUTING (legacy)
     if (this._awaitingQuestionAgentId) {
       const agentId = this._awaitingQuestionAgentId;
       this.agentAnswer(agentId, transcript);
       return;
     }
 
-    // VOICE TRIGGER
+    // VOICE TRIGGER — fast-path
     const trigger = parseVoiceTrigger(transcript);
     if (trigger) {
       const [triggerTask, triggerRemote] = trigger;
-      const name = extractAgentName(triggerTask);
-      try {
-        const agent = this._spawnSub(name, triggerTask, triggerRemote);
-        const ack = `On it! Kicked off ${formatAgentDisplayName(agent)}.`;
+      if (triggerRemote) {
+        const name = extractAgentName(triggerTask);
+        try {
+          const agent = this._spawnSub(name, triggerTask, true);
+          const ack = `On it! Kicked off ${formatAgentDisplayName(agent)}.`;
+          this._sendTranscript("claude", ack);
+          this._sendState("talking", ack);
+          await this._speak(ack);
+        } catch (e) {
+          this._sendTranscript("claude_error", `spawn failed: ${e}`);
+        }
+      } else {
+        const ack = "On it, passing that to the tech lead.";
         this._sendTranscript("claude", ack);
         this._sendState("talking", ack);
         await this._speak(ack);
-      } catch (e) {
-        this._sendTranscript("claude_error", `spawn failed: ${e}`);
+        this._delegateToTechLead(triggerTask);
       }
       return;
     }
 
-    // AGENT TARGETING
+    // AGENT TARGETING — "agent hermes: do X"
     const target = parseAgentTarget(transcript);
     if (target) {
       const [ref, msg] = target;
@@ -559,118 +579,175 @@ export class ChatEngine {
       }
     }
 
-    // COORDINATOR
-    let coordinatorContext = "";
+    // EM DECISION — send to main session, parse ROUTE blocks
+    this._sendState("thinking");
+    this._sendAction("deciding...");
+
+    let emPrompt = transcript;
     if (this._agentManager.allAgents.length) {
-      this._sendAction("consulting coordinator...");
-      const suggestion = await this._coordinator.advise(
-        transcript,
-        this._agentManager.allAgents.map((a) => ({
-          id: a.id,
-          name: a.name,
-          status: a.status,
-          task: a.task,
-        }))
-      );
-      coordinatorContext = suggestion.advice;
-      if (suggestion.agent_id) {
-        const coordAgent = this._agentManager.agents.get(suggestion.agent_id);
-        if (coordAgent) {
-          await this._routeToAgent(coordAgent, transcript, "(coordinator)");
-          return;
-        }
-      }
+      const agentsCtx = this._agentManager.allAgents
+        .map((a) => `  - ${a.name} (${a.id}): ${a.status} — ${a.task.slice(0, 80)}`)
+        .join("\n");
+      emPrompt = `[SYSTEM: Active agents:\n${agentsCtx}]\n\n${transcript}`;
     }
 
-    // SMART ROUTING
-    if (lastSubId) {
-      const agent = this._agentManager.agents.get(lastSubId);
-      if (agent && agent.status !== "error") {
-        this._sendAction("routing...");
-        const route = await classifyMessageTarget(transcript, agent.name, agent.task);
-        if (route === "agent") {
-          await this._routeToAgent(agent, transcript);
-          return;
-        }
-      }
-    }
-
-    // MAIN AGENT
-    let prompt = transcript;
-    if (coordinatorContext) {
-      prompt = `[Coordinator context: ${coordinatorContext}]\n${transcript}`;
-    }
-    this._sendState("working");
-    this._sendAction("claude is working...");
     const events: Record<string, any>[] = [];
-    let earlyText = "";
-    let hasToolCalls = false;
-    let earlySpeakPromise: Promise<void> | null = null;
-
     try {
-      const fullPrompt = buildPromptWithImages(prompt, this._imageContext);
+      const fullPrompt = buildPromptWithImages(emPrompt, this._imageContext);
       for await (const event of this.session.send(fullPrompt)) {
         events.push(event);
-        if (event.type === "assistant") {
-          const content = event.message?.content || [];
-          for (const item of content) {
-            if (item.type === "tool_use") {
-              hasToolCalls = true;
-              const tname = item.name || "?";
-              const short = summarizeToolArgs(tname, item.input || {});
-              this._sendTicker(`${tname}(${short})`);
-            } else if (item.type === "text") {
-              const text = item.text || "";
-              for (const [sname, stask, sremote] of parseSpawnMarkers(text)) {
-                try { this._spawnSub(sname, stask, sremote); } catch {}
-              }
-              const cleaned = stripSpawnMarkers(text).trim();
-              if (!earlyText && cleaned) {
-                earlyText = cleaned;
-                this._sendTranscript("claude", earlyText);
-                this._sendState("talking", earlyText);
-                earlySpeakPromise = this._speak(earlyText);
-              }
-            }
-          }
-        }
       }
     } catch (e) {
       this._sendTranscript("claude_error", String(e));
       this._sendState("idle");
       this._sendAction(`error: ${String(e).slice(0, 60)}`);
-      this._sendTicker("");
       return;
     }
 
     if (this._stopFlag.isSet()) return;
 
-    if (earlySpeakPromise) {
-      await earlySpeakPromise;
+    const emText = extractFinalText(events);
+    const route = parseEMRoute(emText);
+    const spoken = route ? stripRouteBlocks(emText) : emText;
+
+    if (route?.target === "tech_lead") {
+      this._delegateToTechLead(route.content);
+    } else if (route?.target === "tech_lead_answer") {
+      this._handleTLEscalationResponse(
+        this._awaitingTLEscalation || "", this._awaitingTLAgentId, route.content
+      );
+    } else if (route?.target.startsWith("agent:")) {
+      const agentRef = route.target.slice(6);
+      const agent = this._agentManager.resolveAgentRef(agentRef);
+      if (agent) {
+        this._agentManager.sendToAgent(
+          agent, route.content,
+          (id, ev) => this._onSubEvent(id, ev),
+          (id) => this._onSubDone(id),
+        );
+        this._send("agent_status", { agent_id: agent.id, status: "working", name: agent.name });
+      }
     }
 
-    // SUMMARIZE + SPEAK
-    this._sendTicker("");
-    if (hasToolCalls) {
-      this._sendState("thinking");
-      this._sendAction("summarizing results...");
-      let summary: string;
-      try {
-        summary = await summarizeTurn(transcript, events);
-      } catch (e) {
-        summary = `Hit an error while summarizing: ${e}`;
-      }
-      if (summary) {
-        this._sendTranscript("claude", summary);
-        this._sendState("talking", summary);
-        this._sendAction("speaking (press SPACE to interrupt)");
-        await this._speak(summary);
-      }
-    } else if (!earlyText) {
-      this._sendTranscript("claude", "Done.");
-      this._sendState("talking", "Done.");
-      await this._speak("Done.");
+    if (spoken) {
+      this._sendTranscript("claude", spoken);
+      this._sendState("talking", spoken);
+      this._sendAction("speaking (press SPACE to interrupt)");
+      await this._speak(spoken);
     }
+  }
+
+  // ── Tech Lead integration ──
+
+  private _delegateToTechLead(task: string): void {
+    this._sendAction("tech lead is planning...");
+    this._sendTicker("tech lead");
+
+    this._techLead.delegateTask(task).then((response) => {
+      this._sendTicker("");
+      for (const [name, agentTask] of response.spawns) {
+        try { this._spawnSub(name, agentTask); } catch (e) {
+          console.error(`[tl] spawn failed for ${name}:`, e);
+        }
+      }
+      if (response.escalation) {
+        this._awaitingTLEscalation = response.escalation;
+        this._speechQueue.put("tech lead", response.escalation, {
+          requiresResponse: true, questionType: "agent_question",
+        });
+      }
+      if (response.report) {
+        this._speakTLReport(response.report);
+      }
+    }).catch((e) => {
+      console.error("[tl] delegate error:", e);
+      this._sendTicker("");
+      this._speechQueue.put("tech lead", `Hit an error while planning: ${e}`);
+    });
+  }
+
+  private _handleTLQuestionFromAgent(
+    agentId: string, agentName: string, question: string, task: string
+  ): void {
+    this._sendAction(`tech lead answering ${agentName}...`);
+    this._techLead.handleAgentQuestion(agentName, question, task).then((response) => {
+      if (response.answer) {
+        this._agentManager.handleAgentQuestion(
+          agentId, response.answer,
+          (id, ev) => this._onSubEvent(id, ev),
+          (id) => this._onSubDone(id),
+        );
+        this._send("agent_status", { agent_id: agentId, status: "working", name: agentName });
+      } else if (response.escalation) {
+        this._awaitingTLEscalation = response.escalation;
+        this._awaitingTLAgentId = agentId;
+        this._speechQueue.put("tech lead", `Question about ${agentName}'s work: ${response.escalation}`, {
+          requiresResponse: true, questionType: "agent_question",
+        });
+      }
+    }).catch((e) => {
+      console.error(`[tl] question error for ${agentName}:`, e);
+      this._awaitingTLEscalation = question;
+      this._awaitingTLAgentId = agentId;
+      this._speechQueue.put("tech lead", `Agent ${agentName} asks: ${question}`, {
+        requiresResponse: true, questionType: "agent_question",
+      });
+    });
+  }
+
+  private _handleTLEscalationResponse(
+    question: string, agentId: string | null, userAnswer: string
+  ): void {
+    this._techLead.forwardUserAnswer(question, userAnswer).then((response) => {
+      if (response.answer && agentId) {
+        this._agentManager.handleAgentQuestion(
+          agentId, response.answer,
+          (id, ev) => this._onSubEvent(id, ev),
+          (id) => this._onSubDone(id),
+        );
+        const agent = this._agentManager.agents.get(agentId);
+        if (agent) this._send("agent_status", { agent_id: agentId, status: "working", name: agent.name });
+      }
+      for (const [name, agentTask] of response.spawns) {
+        try { this._spawnSub(name, agentTask); } catch {}
+      }
+      if (response.report) this._speakTLReport(response.report);
+    }).catch((e) => console.error("[tl] escalation response error:", e));
+  }
+
+  private _submitResultToTL(agent: AgentInstance): void {
+    const summary = extractFinalText(agent.events) || "Completed with no summary.";
+    this._sendAction(`tech lead reviewing ${agent.name}...`);
+
+    this._techLead.reviewResult(agent.name, agent.task, summary).then((response) => {
+      for (const [fixName, fixInstruction] of response.fixes) {
+        const fixAgent = this._agentManager.resolveAgentRef(fixName);
+        if (fixAgent) {
+          this._agentManager.sendToAgent(fixAgent, fixInstruction,
+            (id, ev) => this._onSubEvent(id, ev), (id) => this._onSubDone(id));
+          this._send("agent_status", { agent_id: fixAgent.id, status: "working", name: fixAgent.name });
+        }
+      }
+      for (const [name, agentTask] of response.spawns) {
+        try { this._spawnSub(name, agentTask); } catch {}
+      }
+      if (response.report) this._speakTLReport(response.report);
+      if (agent.status === "pr_pending" && agent.branch) {
+        const prMsg = response.report
+          ? `${response.report} Changes are on branch ${agent.branch}. Want me to open a PR?`
+          : `Agent ${agent.name} made changes on branch ${agent.branch}. Want me to open a PR?`;
+        this._speechQueue.put("tech lead", prMsg, {
+          requiresResponse: true, agentId: agent.id, questionType: "pr",
+        });
+      }
+    }).catch((e) => {
+      console.error(`[tl] review error for ${agent.name}:`, e);
+      this._speechQueue.put(agent.name, summary);
+    });
+  }
+
+  private _speakTLReport(report: string): void {
+    this._speechQueue.put("tech lead", report);
   }
 
   // ── Routing helper ──
@@ -833,7 +910,7 @@ export class ChatEngine {
         agent_id: agent.id,
       });
     }
-    this._coordinator.notifySpawn(agent.id, agent.name, task);
+    // TL is notified of spawns via its own session context
     this._scheduleStateSave();
     return agent;
   }
@@ -866,14 +943,22 @@ export class ChatEngine {
 
   private _onSubDone(agentId: string): void {
     const agent = this._agentManager.agents.get(agentId);
-    if (agent) {
-      this._coordinator.notifyDone(agentId, agent.name, agent.task, agent.status);
-      this._send("agent_status", {
-        agent_id: agentId,
-        status: agent.status,
-        name: formatAgentDisplayName(agent),
-      });
-      this._scheduleStateSave();
+    if (!agent) return;
+
+    this._send("agent_status", {
+      agent_id: agentId,
+      status: agent.status,
+      name: formatAgentDisplayName(agent),
+    });
+    this._scheduleStateSave();
+
+    if (agent.status === "needs_input" && agent.pendingQuestion) {
+      this._handleTLQuestionFromAgent(agentId, agent.name, agent.pendingQuestion, agent.task);
+    } else if (agent.status === "done" || agent.status === "pr_pending") {
+      this._submitResultToTL(agent);
+    } else if (agent.status === "error") {
+      const errMsg = agent.pendingQuestion || "Unknown error";
+      this._speechQueue.put(agent.name, `Error: ${errMsg}`, { agentId: agent.id });
     }
   }
 
@@ -905,6 +990,7 @@ export class ChatEngine {
       messages: this._transcriptLog.slice(-200),
       conversations: this._convLog,
       current_conversation_id: this._currentConvId,
+      tech_lead_session_id: this._techLead.sessionId,
     };
     saveState(state, cwd);
   }
@@ -930,6 +1016,9 @@ export class ChatEngine {
 
     this.session.sessionId = state.main_session_id;
     this._agentManager._counter = state.agent_counter;
+    if (state.tech_lead_session_id) {
+      this._techLead.restoreSession(state.tech_lead_session_id);
+    }
 
     // Restore conversations
     if (state.conversations?.length) {
