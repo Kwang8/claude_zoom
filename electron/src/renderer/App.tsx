@@ -75,7 +75,7 @@ export function App() {
   const selectedAgent = state.agents.find((agent) => agent.agent_id === selectedAgentId) || null;
   const visibleTranscript = selectedAgent
     ? state.transcript.filter((message) => message.agent_id === selectedAgent.agent_id)
-    : state.transcript;
+    : state.transcript.filter((message) => message.kind !== "tool_use");
 
   return (
     <div className="app">
