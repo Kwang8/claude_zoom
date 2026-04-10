@@ -1,4 +1,5 @@
 import { execFile } from "child_process";
+import { getClaudePath } from "./claude-session";
 
 const COORDINATOR_SYSTEM_PROMPT = `\
 You are a hidden router for a multi-agent voice assistant.
@@ -144,7 +145,7 @@ export class CoordinatorAgent {
     }
 
     return new Promise((resolve) => {
-      const proc = execFile("claude", args, {
+      const proc = execFile(getClaudePath(), args, {
         cwd: this._cwd,
         timeout,
       }, (err, stdout) => {
