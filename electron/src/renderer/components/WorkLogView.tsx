@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { AgentInfo, ConversationGroup, TranscriptMessage } from "../types/messages";
+import { GroupedTranscript } from "./GroupedTranscript";
 import { TranscriptEntry } from "./TranscriptEntry";
 
 interface Props {
@@ -67,9 +68,7 @@ function ActiveConversation({
       </div>
       {messages.length > 0 && (
         <div className="worklog-entry-transcript">
-          {messages.map((msg, i) => (
-            <TranscriptEntry key={i} message={msg} githubRepo={null} />
-          ))}
+          <GroupedTranscript messages={messages} githubRepo={null} />
         </div>
       )}
     </div>
