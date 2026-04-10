@@ -12,8 +12,9 @@ const ROLE_LABELS: Record<string, string> = {
   claude_error: "claude (error)",
 };
 
-// Matches owner/repo#123 or bare #123
-const PR_LINK_RE = /([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)?#(\d+)/g;
+// Matches full URLs or owner/repo#123 or bare #123
+const LINK_RE =
+  /(https?:\/\/[^\s<>"')\]]+[^\s<>"')\].,;:!?])|(?:([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)?#(\d+))/g;
 
 function openExternal(url: string) {
   (window as any).claude?.openExternal(url);
@@ -24,33 +25,53 @@ function renderWithLinks(text: string, githubRepo: string | null): React.ReactNo
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  PR_LINK_RE.lastIndex = 0;
-  while ((match = PR_LINK_RE.exec(text)) !== null) {
-    const [fullMatch, repoPrefix, number] = match;
-    const repo = repoPrefix || githubRepo;
-    if (!repo) continue;
+  LINK_RE.lastIndex = 0;
+  while ((match = LINK_RE.exec(text)) !== null) {
+    const [fullMatch, urlMatch, repoPrefix, prNumber] = match;
 
-    // Push text before this match
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
+    if (urlMatch) {
+      // Full URL match
+      if (match.index > lastIndex) {
+        nodes.push(text.slice(lastIndex, match.index));
+      }
+      nodes.push(
+        <a
+          key={match.index}
+          href={urlMatch}
+          onClick={(e) => {
+            e.preventDefault();
+            openExternal(urlMatch);
+          }}
+          className="hyperlink"
+        >
+          {urlMatch}
+        </a>
+      );
+      lastIndex = match.index + fullMatch.length;
+    } else if (prNumber) {
+      // PR/issue reference match
+      const repo = repoPrefix || githubRepo;
+      if (!repo) continue;
+
+      if (match.index > lastIndex) {
+        nodes.push(text.slice(lastIndex, match.index));
+      }
+      const url = `https://github.com/${repo}/issues/${prNumber}`;
+      nodes.push(
+        <a
+          key={match.index}
+          href={url}
+          onClick={(e) => {
+            e.preventDefault();
+            openExternal(url);
+          }}
+          className="pr-link"
+        >
+          {fullMatch}
+        </a>
+      );
+      lastIndex = match.index + fullMatch.length;
     }
-
-    const url = `https://github.com/${repo}/issues/${number}`;
-    nodes.push(
-      <a
-        key={match.index}
-        href={url}
-        onClick={(e) => {
-          e.preventDefault();
-          openExternal(url);
-        }}
-        className="pr-link"
-      >
-        {fullMatch}
-      </a>
-    );
-
-    lastIndex = match.index + fullMatch.length;
   }
 
   if (lastIndex < text.length) {
