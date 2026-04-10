@@ -98,6 +98,15 @@ def _resolve_rate() -> str:
     return os.environ.get("CLAUDE_ZOOM_SAY_RATE") or DEFAULT_SAY_RATE
 
 
+def _build_say_cmd(text: str) -> list[str]:
+    cmd = ["say", "-r", _resolve_rate()]
+    voice = _resolve_voice()
+    if voice:
+        cmd.extend(["-v", voice])
+    cmd.append(text)
+    return cmd
+
+
 def speak(text: str) -> None:
     """Speak `text` through the default audio output via macOS `say`.
 
@@ -107,12 +116,23 @@ def speak(text: str) -> None:
     """
     if not text.strip():
         return
-    cmd = ["say", "-r", _resolve_rate()]
-    voice = _resolve_voice()
-    if voice:
-        cmd.extend(["-v", voice])
-    cmd.append(text)
-    subprocess.run(cmd, check=False)
+    subprocess.run(_build_say_cmd(text), check=False)
+
+
+def speak_async(text: str) -> subprocess.Popen[bytes] | None:
+    """Start a non-blocking `say` subprocess and return the Popen handle.
+
+    The caller is responsible for polling `.poll()` and calling `.terminate()`
+    to interrupt playback (e.g. for push-to-talk barge-in). Returns None if
+    `text` is empty.
+    """
+    if not text.strip():
+        return None
+    return subprocess.Popen(
+        _build_say_cmd(text),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def _load_parakeet() -> Any:
@@ -174,3 +194,96 @@ def listen_once(seconds: float = 6.0) -> str | None:
 
     text = (getattr(result, "text", "") or "").strip()
     return text or None
+
+
+class Recorder:
+    """Manually-controlled mic recorder for push-to-talk UX.
+
+    Use `start()` to open the mic and begin buffering audio in a background
+    stream, then `stop_and_transcribe()` on another thread to close the stream
+    and run parakeet over what was captured. Unlike `listen_once`, this does
+    not impose a fixed duration — the user controls it via a toggle key.
+    """
+
+    def __init__(self) -> None:
+        self._frames: list = []
+        self._stream: Any = None
+
+    def start(self) -> None:
+        try:
+            import sounddevice as sd  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise RuntimeError(
+                "voice deps not installed. Run: pip install -e '.[voice]'"
+            ) from e
+
+        self._frames = []
+
+        def _callback(indata, _frames, _time_info, _status) -> None:
+            # Copy so we don't keep a reference to the PortAudio buffer.
+            self._frames.append(indata.copy())
+
+        self._stream = sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype="float32",
+            callback=_callback,
+        )
+        self._stream.start()
+
+    def stop_and_transcribe(self) -> str | None:
+        """Close the stream and return a transcript, or None for silence."""
+        try:
+            import numpy as np  # type: ignore[import-not-found]
+            import soundfile as sf  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise RuntimeError(
+                "voice deps not installed. Run: pip install -e '.[voice]'"
+            ) from e
+
+        stream = self._stream
+        if stream is None:
+            return None
+        try:
+            stream.stop()
+            stream.close()
+        finally:
+            self._stream = None
+
+        if not self._frames:
+            return None
+        audio = np.concatenate(self._frames).flatten()
+        self._frames = []
+
+        rms = float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
+        if rms < 0.005:
+            return None
+
+        model = _load_parakeet()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            sf.write(tmp_path, audio, SAMPLE_RATE, subtype="PCM_16")
+            result = model.transcribe(tmp_path)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        text = (getattr(result, "text", "") or "").strip()
+        return text or None
+
+    def close(self) -> None:
+        """Best-effort cleanup of the stream without running transcription."""
+        stream = self._stream
+        if stream is None:
+            return
+        try:
+            stream.stop()
+            stream.close()
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._stream = None
+            self._frames = []

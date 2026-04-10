@@ -8,8 +8,8 @@ Two paths:
    slow model already nudges Claude toward this shape, so the fast path hits
    on most turns. Latency: zero extra.
 
-2. **Slow path (Haiku summarizer):** if Claude's final text is missing,
-   empty, multi-paragraph, or markdown-heavy, fall back to a Haiku call
+2. **Slow path (Sonnet summarizer):** if Claude's final text is missing,
+   empty, multi-paragraph, or markdown-heavy, fall back to a Sonnet call
    that rewrites the events into one spoken sentence. Latency: ~5-10s.
 
 The second path is the "intermediate fast model interpreting slower model"
@@ -26,7 +26,7 @@ from typing import Any
 
 from .chat import events_to_transcript
 
-MODEL = "haiku"
+MODEL = "sonnet"
 MAX_TRANSCRIPT_CHARS = 8_000
 MAX_FAST_PATH_WORDS = 30
 
@@ -91,16 +91,16 @@ def summarize_turn(user_message: str, events: list[dict[str, Any]]) -> str:
     """Return a spoken summary of the turn's events.
 
     Fast path: speak Claude's own final assistant text if it's already
-    voice-friendly (short + no markdown). Slow path: call Haiku to rewrite.
+    voice-friendly (short + no markdown). Slow path: call Sonnet to rewrite.
     """
     final_text = extract_final_text(events)
     if _is_voice_friendly(final_text):
         return final_text
 
-    return _haiku_summarize(user_message, events)
+    return _sonnet_summarize(user_message, events)
 
 
-def _haiku_summarize(user_message: str, events: list[dict[str, Any]]) -> str:
+def _sonnet_summarize(user_message: str, events: list[dict[str, Any]]) -> str:
     transcript = events_to_transcript(events)
     if not transcript.strip():
         return "Nothing happened that turn."

@@ -13,9 +13,10 @@ UI animations keep running.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -31,7 +32,6 @@ if TYPE_CHECKING:
 
 
 LISTEN_SECONDS = 5.0
-CHAT_LISTEN_SECONDS = 6.0
 TICK_INTERVAL = 0.35
 
 State = Literal["idle", "talking", "listening", "thinking", "working"]
@@ -43,85 +43,85 @@ State = Literal["idle", "talking", "listening", "thinking", "working"]
 # Each state is a list of frames cycled at TICK_INTERVAL.
 
 _IDLE = [
-    "   ___   \n"
-    "  |o o|  \n"
-    "  |===|  \n"
-    "  /| |\\  \n"
-    "  /_|_\\  ",
-    "   ___   \n"
-    "  |- -|  \n"
-    "  |===|  \n"
-    "  /| |\\  \n"
-    "  /_|_\\  ",
+    "  ,---,  \n"
+    " ( o o ) \n"
+    "  ( ~ )  \n"
+    "  (   )  \n"
+    "  '---'  ",
+    "  ,---,  \n"
+    " ( - - ) \n"
+    "  ( ~ )  \n"
+    "  (   )  \n"
+    "  '---'  ",
 ]
 
 _TALKING = [
-    "   ___   \n"
-    "  |o o|  \n"
-    "  | - |  \n"
-    "  /| |\\  \n"
-    "  /_|_\\  ",
-    "   ___   \n"
-    "  |o o|  \n"
-    "  | o |  \n"
-    "  /| |\\  \n"
-    "  /_|_\\  ",
-    "   ___   \n"
-    "  |o o|  \n"
-    "  |-=-|  \n"
-    "  /| |\\  \n"
-    "  /_|_\\  ",
+    "  ,---,  \n"
+    " ( o o ) \n"
+    "  ( - )  \n"
+    "  (   )  \n"
+    "  '---'  ",
+    "  ,---,  \n"
+    " ( o o ) \n"
+    "  ( o )  \n"
+    "  (   )  \n"
+    "  '---'  ",
+    "  ,---,  \n"
+    " ( o o ) \n"
+    "  (===)  \n"
+    "  (   )  \n"
+    "  '---'  ",
 ]
 
 _LISTENING = [
-    "   ___     \n"
-    "  |O O|    \n"
-    "  |___| )) \n"
-    "  /| |\\    \n"
-    "  /_|_\\    ",
-    "   ___     \n"
-    "  |O O|  ))\n"
-    "  |___|    \n"
-    "  /| |\\    \n"
-    "  /_|_\\    ",
+    "  ,---,   \n"
+    " ( O O )) \n"
+    "  ( ~ )   \n"
+    "  (   )   \n"
+    "  '---'   ",
+    "  ,---,    \n"
+    " ( O O ))) \n"
+    "  ( ~ )    \n"
+    "  (   )    \n"
+    "  '---'    ",
 ]
 
 _THINKING = [
-    "   ___     \n"
-    "  |- -|  . \n"
-    "  |=_=|    \n"
-    "  /| |\\    \n"
-    "  /_|_\\    ",
-    "   ___     \n"
-    "  |- -| .. \n"
-    "  |=_=|    \n"
-    "  /| |\\    \n"
-    "  /_|_\\    ",
-    "   ___     \n"
-    "  |- -| ...\n"
-    "  |=_=|    \n"
-    "  /| |\\    \n"
-    "  /_|_\\    ",
+    "  ,---,  \n"
+    " ( - - ).\n"
+    "  ( .. ) \n"
+    "  (   )  \n"
+    "  '---'  ",
+    "  ,---,   \n"
+    " ( - - )..\n"
+    "  ( .. )  \n"
+    "  (   )   \n"
+    "  '---'   ",
+    "  ,---,    \n"
+    " ( - - )...\n"
+    "  ( .. )   \n"
+    "  (   )    \n"
+    "  '---'    ",
 ]
 
 # "Working" is the state while Claude's subprocess is running real tools —
-# we reuse the thinking frame layout but with a cog instead of dots.
+# we reuse the thinking frame layout but with a spinning star instead of dots.
 _WORKING = [
-    "   ___     \n"
-    "  |o o|  * \n"
-    "  |===|    \n"
-    "  /| |\\    \n"
-    "  /_|_\\    ",
-    "   ___     \n"
-    "  |o o| *  \n"
-    "  |===|    \n"
-    "  /| |\\    \n"
-    "  /_|_\\    ",
-    "   ___     \n"
-    "  |o o|*   \n"
-    "  |===|    \n"
-    "  /| |\\    \n"
-    "  /_|_\\    ",
+    "  ,---,   \n"
+    " ( o o ) *\n"
+    "  ( == )  \n"
+    "  (   )   \n"
+    "  '---'   ",
+    "  ,---,  \n"
+    " ( o o )*\n"
+    "  ( == ) \n"
+    "  (   )  \n"
+    "  '---'  ",
+    "  ,---,  \n"
+    "*( o o ) \n"
+    "  ( == ) \n"
+    "  (   )  \n"
+    "  '---'  ",
 ]
 
 
@@ -331,6 +331,7 @@ class StatusBar(Static):
 
     progress: reactive[str] = reactive("")
     action: reactive[str] = reactive("ready")
+    hint: reactive[str] = reactive("q quit · → skip · r replay")
 
     def on_mount(self) -> None:
         self._render_line()
@@ -341,10 +342,12 @@ class StatusBar(Static):
     def watch_action(self, _new: str) -> None:
         self._render_line()
 
+    def watch_hint(self, _new: str) -> None:
+        self._render_line()
+
     def _render_line(self) -> None:
-        hint = "q quit · → skip · r replay"
         left = f"{self.progress}  ·  {self.action}" if self.progress else self.action
-        self.update(f"{left}   [{hint}]")
+        self.update(f"{left}   [{self.hint}]")
 
 
 # ─── App ───────────────────────────────────────────────────────────────────
@@ -537,9 +540,10 @@ class PresentApp(App):
 
 @dataclass
 class ChatMessage:
-    role: Literal["user", "claude", "claude_error"]
+    role: Literal["user", "claude", "claude_error", "sub_agent", "system"]
     text: str
     timestamp: str  # "HH:MM"
+    agent_name: str = ""  # filled for sub_agent messages
 
 
 class TranscriptEntry(Static):
@@ -574,6 +578,13 @@ class TranscriptEntry(Static):
         elif role == "claude":
             header = f"[bold cyan]claude[/bold cyan]  [dim]{ts}[/dim]"
             body_markup = f"[white]{_escape(self.message.text)}[/white]"
+        elif role == "sub_agent":
+            name = self.message.agent_name or "agent"
+            header = f"[bold green]{_escape(name)}[/bold green]  [dim]{ts}[/dim]"
+            body_markup = f"[white]{_escape(self.message.text)}[/white]"
+        elif role == "system":
+            header = ""
+            body_markup = f"[dim]{_escape(self.message.text)}[/dim]"
         else:  # claude_error
             header = f"[bold red]claude (error)[/bold red]  [dim]{ts}[/dim]"
             body_markup = f"[red]{_escape(self.message.text)}[/red]"
@@ -613,7 +624,8 @@ class ActivityTicker(Static):
     DEFAULT_CSS = """
     ActivityTicker {
         width: 1fr;
-        padding: 1 2;
+        height: 3;
+        padding: 0 2;
         color: $text-muted;
         border: round $accent-darken-1;
     }
@@ -634,24 +646,105 @@ class ActivityTicker(Static):
             self.update("[dim](idle)[/dim]")
 
 
+class MiniAgentPanel(Static):
+    """Compact card for one sub-agent in the sidebar."""
+
+    DEFAULT_CSS = """
+    MiniAgentPanel {
+        height: auto;
+        padding: 0 1;
+        margin: 0 0 1 0;
+        border: round $accent-darken-1;
+    }
+    """
+
+    agent_state: reactive[str] = reactive("working")
+    ticker: reactive[str] = reactive("")
+
+    _STATE_ICONS = {
+        "working": "[cyan]*[/cyan]",
+        "done": "[green]✓[/green]",
+        "error": "[red]✗[/red]",
+    }
+
+    def __init__(self, agent_id: str, name: str, **kwargs: Any) -> None:
+        super().__init__("", **kwargs)
+        self.agent_id = agent_id
+        self.agent_name = name
+        # Set initial content so Textual can lay out before on_mount.
+        self._refresh_content()
+
+    def on_mount(self) -> None:
+        self._refresh_content()
+
+    def watch_agent_state(self, _new: str) -> None:
+        self._refresh_content()
+
+    def watch_ticker(self, _new: str) -> None:
+        self._refresh_content()
+
+    def _refresh_content(self) -> None:
+        icon = self._STATE_ICONS.get(self.agent_state, "?")
+        line1 = f"{icon} [bold]{_escape(self.agent_name)}[/bold]"
+        line2 = ""
+        if self.ticker:
+            line2 = f"\n  [dim]{_escape(self.ticker[:40])}[/dim]"
+        self.update(f"{line1}{line2}")
+
+
+class AgentSidebar(VerticalScroll):
+    """Left column: main agent character panel + sub-agent mini panels."""
+
+    DEFAULT_CSS = """
+    AgentSidebar {
+        width: 36;
+        height: 1fr;
+        border: round $accent;
+        padding: 0 1;
+    }
+    AgentSidebar #sub-agents-header {
+        color: $text-muted;
+        text-align: center;
+        margin: 1 0 0 0;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield CharacterPanel(id="character")
+        yield Static("[dim]── sub agents ──[/dim]", id="sub-agents-header")
+
+
+def _extract_agent_name(task: str) -> str:
+    """Best-effort short name from the first few words of a task."""
+    words = task.split()[:2]
+    name = "-".join(w.lower().strip(".,!?;:") for w in words)
+    return name[:20] if name else "task"
+
+
 class ChatApp(App):
-    """Voice-first Textual app that lets the user interact with a live
-    Claude Code instance via ClaudeSession. Auto-cycles:
-    listen → claude -p → log events → summarize → speak → repeat.
+    """Multi-agent voice chat with push-to-talk. The user talks to a main
+    Claude agent; sub-agents can be spawned by voice trigger or by the main
+    agent's SPAWN markers, running in isolated git worktrees. Sub-agent
+    summaries are spoken via a polite queue after the current speaker.
     """
 
     CSS = """
     Screen {
         layout: vertical;
     }
-    #footer {
+    #body {
         layout: horizontal;
-        height: 9;
+        height: 1fr;
+    }
+    #main-area {
+        width: 1fr;
+        height: 1fr;
     }
     """
 
     BINDINGS = [
         Binding("q", "quit", "quit"),
+        Binding("space", "toggle_mic", "mic", priority=True),
         Binding("escape", "cancel_turn", "cancel turn"),
     ]
 
@@ -659,23 +752,43 @@ class ChatApp(App):
         super().__init__()
         self.session = session
         self._stop_flag = threading.Event()
+        self._mic_event = threading.Event()
+        # Set when the main input loop is idle (waiting for mic press).
+        # The speech consumer only plays sub-agent summaries when this is set.
+        self._main_idle = threading.Event()
+
+        from .agents import AgentManager, SpeechQueue
+
+        self._speech_queue = SpeechQueue()
+        self._agent_manager = AgentManager(self._speech_queue)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        yield TranscriptView(id="transcript")
-        with Horizontal(id="footer"):
-            yield CharacterPanel(id="character")
-            yield ActivityTicker(id="ticker")
+        with Horizontal(id="body"):
+            yield AgentSidebar(id="sidebar")
+            with Vertical(id="main-area"):
+                yield TranscriptView(id="transcript")
+                yield ActivityTicker(id="ticker")
         yield StatusBar(id="status")
 
     def on_mount(self) -> None:
         self.title = "claude_zoom · chat"
         self.sub_title = f"cwd: {self.session.cwd or '.'}"
-        self.query_one(StatusBar).progress = "booting"
-        self.query_one(StatusBar).action = "warming up"
+        status = self.query_one(StatusBar)
+        status.hint = "q quit · space talk · esc cancel"
+        status.progress = "booting"
+        status.action = "warming up"
+        # Start the speech consumer that plays sub-agent summaries.
+        self._speech_thread = threading.Thread(
+            target=self._speech_consumer, daemon=True, name="speech-consumer"
+        )
+        self._speech_thread.start()
         self._run_chat_loop()
 
     # ─── Key actions ───────────────────────────────────────────────────────
+
+    def action_toggle_mic(self) -> None:
+        self._mic_event.set()
 
     def action_cancel_turn(self) -> None:
         self.session.cancel()
@@ -683,46 +796,91 @@ class ChatApp(App):
 
     async def action_quit(self) -> None:  # type: ignore[override]
         self._stop_flag.set()
+        self._mic_event.set()
         self.session.cancel()
+        self._agent_manager.kill_all()
         self.exit()
 
-    # ─── Main worker: voice loop ───────────────────────────────────────────
+    # ─── Main worker: push-to-talk voice loop ─────────────────────────────
 
     @work(thread=True, exclusive=True)
     def _run_chat_loop(self) -> None:
-        # Deferred imports so `from claude_zoom.tui import ChatApp` is cheap.
+        from .agents import parse_spawn_markers, parse_voice_trigger
         from .chat import summarize_tool_args
         from .narrator import summarize_turn
-        from .voice import listen_once, speak
+        from .voice import Recorder
 
-        intro = "Hey! What can I do for you?"
-        self._set_state("talking", intro)
+        intro = (
+            "Hey! Press space whenever you want to talk to me. "
+            "You can also ask me to spin off sub-agents for parallel work."
+        )
         self._append_message("claude", intro)
         self._set_progress("ready")
-        self._set_action("speaking intro")
-        speak(intro)
+        self._speak_main(intro)
+        self._mic_event.clear()
 
         turn = 0
         while not self._stop_flag.is_set():
-            turn += 1
-            # ── LISTEN ──
+            # ── IDLE: wait for the user to press space ──
             self._set_ticker("")
+            self._set_state("idle", "")
+            self._set_progress(f"turn {turn}" if turn else "ready")
+            self._set_action("press SPACE to talk")
+            self._main_idle.set()
+            if not self._wait_for_mic_press():
+                break
+            self._main_idle.clear()
+
+            # ── LISTEN ──
+            turn += 1
             self._set_state("listening", "")
             self._set_progress(f"turn {turn}")
-            self._set_action(f"🎙 listening {int(CHAT_LISTEN_SECONDS)}s...")
-            transcript = listen_once(seconds=CHAT_LISTEN_SECONDS)
-            if self._stop_flag.is_set():
-                break
-            if not transcript:
-                # Silence — idle briefly then listen again.
+            self._set_action("recording — press SPACE to send")
+            recorder = Recorder()
+            try:
+                recorder.start()
+            except Exception as e:  # noqa: BLE001
+                self._set_action(f"mic error: {str(e)[:60]}")
                 self._set_state("idle", "")
-                self._set_action("(silence — listening again)")
+                continue
+
+            if not self._wait_for_mic_press():
+                recorder.close()
+                break
+
+            self._set_state("thinking", "")
+            self._set_action("transcribing...")
+            try:
+                transcript = recorder.stop_and_transcribe()
+            except Exception as e:  # noqa: BLE001
+                self._set_action(f"transcribe error: {str(e)[:60]}")
+                self._set_state("idle", "")
+                continue
+
+            if not transcript:
+                self._set_action("(no speech detected)")
+                self._set_state("idle", "")
                 continue
 
             self._append_message("user", transcript)
             self._set_action(f"heard: {transcript[:60]}")
 
-            # ── WORK ──
+            # ── CHECK VOICE TRIGGER (direct sub-agent spawn) ──
+            trigger_task = parse_voice_trigger(transcript)
+            if trigger_task:
+                name = _extract_agent_name(trigger_task)
+                try:
+                    self._spawn_sub(name, trigger_task)
+                    # Instant spoken acknowledgment so user doesn't wait.
+                    ack = f"On it! Kicked off agent {name}."
+                    self._append_message("claude", ack)
+                    self._set_state("talking", ack)
+                    self._speak_main(ack)
+                except Exception as e:  # noqa: BLE001
+                    self._append_message("claude_error", f"spawn failed: {e}")
+                continue
+
+            # ── WORK (main agent) ──
             self._set_state("working", "")
             self._set_action("claude is working...")
             events: list[dict] = []
@@ -733,11 +891,18 @@ class ChatApp(App):
                         content = (event.get("message") or {}).get("content") or []
                         for item in content:
                             if item.get("type") == "tool_use":
-                                name = item.get("name", "?")
+                                tname = item.get("name", "?")
                                 short = summarize_tool_args(
-                                    name, item.get("input") or {}
+                                    tname, item.get("input") or {}
                                 )
-                                self._set_ticker(f"{name}({short})")
+                                self._set_ticker(f"{tname}({short})")
+                            elif item.get("type") == "text":
+                                text = item.get("text") or ""
+                                for sname, stask in parse_spawn_markers(text):
+                                    try:
+                                        self._spawn_sub(sname, stask)
+                                    except Exception:  # noqa: BLE001
+                                        pass
             except Exception as e:  # noqa: BLE001
                 self._append_message("claude_error", f"{e}")
                 self._set_state("idle", "")
@@ -761,17 +926,161 @@ class ChatApp(App):
                 summary = "Done."
             self._append_message("claude", summary)
             self._set_state("talking", summary)
-            self._set_action("speaking")
-            speak(summary)
-
-            self._set_state("idle", "")
+            self._set_action("speaking (press SPACE to interrupt)")
+            self._speak_main(summary)
 
         self._set_action("bye")
+
+    # ─── Speech helpers ───────────────────────────────────────────────────
+
+    def _speak_main(self, text: str) -> None:
+        """Speak on behalf of the main agent, with barge-in support.
+
+        When interrupted, ``_mic_event`` is deliberately left *set* so the
+        next ``_wait_for_mic_press`` immediately fires.
+        """
+        from .voice import speak_async
+
+        proc = speak_async(text)
+        if proc is None:
+            return
+        try:
+            while proc.poll() is None:
+                if self._stop_flag.is_set():
+                    proc.terminate()
+                    break
+                if self._mic_event.is_set():
+                    proc.terminate()
+                    break
+                time.sleep(0.05)
+        finally:
+            try:
+                proc.wait(timeout=1.0)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _speech_consumer(self) -> None:
+        """Dedicated thread: drains SpeechQueue when main is idle.
+
+        Politely waits until the main input loop is idle before playing a
+        sub-agent's summary. Supports barge-in: if the user presses space
+        during sub speech, the speech is terminated and the queue drained.
+        """
+        from .voice import speak_async
+
+        while not self._stop_flag.is_set():
+            item = self._speech_queue.get(timeout=0.2)
+            if item is None:
+                continue
+
+            # Wait until main is idle before speaking.
+            while not self._main_idle.is_set() and not self._stop_flag.is_set():
+                time.sleep(0.1)
+            if self._stop_flag.is_set():
+                break
+
+            self._append_message("sub_agent", item.text, agent_name=item.label)
+            self._set_state("talking", item.text)
+            self._set_action(f"speaking: {item.label}")
+            spoken_text = f"{item.label} says: {item.text}"
+            proc = speak_async(spoken_text)
+            if proc is not None:
+                try:
+                    while proc.poll() is None:
+                        if self._stop_flag.is_set():
+                            proc.terminate()
+                            break
+                        if self._mic_event.is_set():
+                            # Barge-in: stop speech, drain queue.
+                            proc.terminate()
+                            self._speech_queue.drain()
+                            break
+                        time.sleep(0.05)
+                finally:
+                    try:
+                        proc.wait(timeout=1.0)
+                    except Exception:  # noqa: BLE001
+                        pass
+            self._set_state("idle", "")
+            self._set_action("press SPACE to talk")
+
+    # ─── Push-to-talk helpers ─────────────────────────────────────────────
+
+    def _wait_for_mic_press(self) -> bool:
+        """Block until ``_mic_event`` fires or the app is stopping."""
+        while not self._stop_flag.is_set():
+            if self._mic_event.is_set():
+                self._mic_event.clear()
+                return True
+            time.sleep(0.05)
+        return False
+
+    # ─── Sub-agent helpers ────────────────────────────────────────────────
+
+    def _spawn_sub(self, name: str, task: str) -> None:
+        """Create a sub-agent and add its panel to the sidebar."""
+        base_cwd = self.session.cwd or "."
+        agent = self._agent_manager.spawn(
+            task=task,
+            name=name,
+            base_cwd=base_cwd,
+            model="sonnet",
+            permission_mode=self.session.permission_mode,
+            on_event=self._on_sub_event,
+            on_done=self._on_sub_done,
+        )
+
+        def _mount() -> None:
+            panel = MiniAgentPanel(agent.id, agent.name, id=f"agent-{agent.id}")
+            try:
+                self.query_one(AgentSidebar).mount(panel)
+            except Exception:  # noqa: BLE001
+                pass
+
+        self._call(_mount)
+        self._append_message("system", f"spawned agent \"{name}\"")
+
+    def _on_sub_event(self, agent_id: str, event: dict) -> None:
+        """Called from a sub-agent thread on each stream-json event."""
+        from .chat import summarize_tool_args
+
+        if event.get("type") != "assistant":
+            return
+        content = (event.get("message") or {}).get("content") or []
+        for item in content:
+            if item.get("type") == "tool_use":
+                tname = item.get("name", "?")
+                short = summarize_tool_args(tname, item.get("input") or {})
+                ticker_text = f"{tname}({short})"
+
+                def _update(t: str = ticker_text) -> None:
+                    try:
+                        panel = self.query_one(
+                            f"#agent-{agent_id}", MiniAgentPanel
+                        )
+                        panel.ticker = t
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                self._call(_update)
+
+    def _on_sub_done(self, agent_id: str) -> None:
+        """Called when a sub-agent finishes or errors."""
+
+        def _update() -> None:
+            try:
+                panel = self.query_one(f"#agent-{agent_id}", MiniAgentPanel)
+                agent = self._agent_manager.agents.get(agent_id)
+                panel.agent_state = agent.status if agent else "done"
+                panel.ticker = ""
+            except Exception:  # noqa: BLE001
+                pass
+
+        self._call(_update)
 
     # ─── Main-thread helpers ───────────────────────────────────────────────
 
     def _call(self, fn, *args, **kwargs) -> None:
-        # Let exceptions propagate via Textual's normal crash handling.
         try:
             self.call_from_thread(fn, *args, **kwargs)
         except Exception:  # pragma: no cover — app shutting down
@@ -794,11 +1103,14 @@ class ChatApp(App):
     def _set_ticker(self, text: str) -> None:
         self._call(lambda: setattr(self.query_one(ActivityTicker), "activity", text))
 
-    def _append_message(self, role: str, text: str) -> None:
+    def _append_message(
+        self, role: str, text: str, agent_name: str = ""
+    ) -> None:
         msg = ChatMessage(
             role=role,  # type: ignore[arg-type]
             text=text,
             timestamp=datetime.now().strftime("%H:%M"),
+            agent_name=agent_name,
         )
         self._call(lambda: self.query_one(TranscriptView).append_message(msg))
 
