@@ -12,4 +12,7 @@ contextBridge.exposeInMainWorld("claude", {
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners("engine-event");
   },
+  openExternal: (url: string) => {
+    ipcRenderer.send("open-external", url);
+  },
 });

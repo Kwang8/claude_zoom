@@ -64,4 +64,5 @@ export type ServerMessage =
   | { type: "tts_end" }
   | { type: "session_restored"; agents: AgentInfo[]; message: string }
   | { type: "progress"; text: string }
-  | { type: "action"; text: string };
+  | { type: "action"; text: string }
+  | { type: "repo_context"; repo: string };

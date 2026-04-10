@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import path from "path";
 import { ClaudeSession } from "./claude-session";
 import { ChatEngine } from "./chat-engine";
@@ -89,6 +89,17 @@ async function createWindow() {
   // When renderer is ready, replay state and start engine
   mainWindow.webContents.on("did-finish-load", () => {
     engine?.replayState();
+    const repo = engine?.githubRepo;
+    if (repo) {
+      mainWindow?.webContents.send("engine-event", { type: "repo_context", repo });
+    }
+  });
+
+  // Open external URLs in the system browser
+  ipcMain.on("open-external", (_event, url: string) => {
+    if (typeof url === "string" && url.startsWith("https://github.com/")) {
+      shell.openExternal(url);
+    }
   });
 
   // Start the engine

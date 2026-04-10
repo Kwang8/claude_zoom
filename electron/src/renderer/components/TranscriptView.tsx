@@ -6,6 +6,7 @@ interface Props {
   messages: TranscriptMessage[];
   selectedAgent: AgentInfo | null;
   onBackToMain: () => void;
+  githubRepo: string | null;
 }
 
 type TranscriptItem =
@@ -58,7 +59,7 @@ function groupTranscript(messages: TranscriptMessage[]): TranscriptItem[] {
   return grouped;
 }
 
-export function TranscriptView({ messages, selectedAgent, onBackToMain }: Props) {
+export function TranscriptView({ messages, selectedAgent, onBackToMain, githubRepo }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
   const [expandedStacks, setExpandedStacks] = useState<Record<string, boolean>>({});
   const transcriptItems = useMemo(() => groupTranscript(messages), [messages]);
@@ -102,7 +103,7 @@ export function TranscriptView({ messages, selectedAgent, onBackToMain }: Props)
       </div>
       {transcriptItems.map((item, i) => {
         if (item.type === "message") {
-          return <TranscriptEntry key={i} message={item.message} />;
+          return <TranscriptEntry key={i} message={item.message} githubRepo={githubRepo} />;
         }
 
         const latest = item.messages[item.messages.length - 1];
@@ -129,11 +130,11 @@ export function TranscriptView({ messages, selectedAgent, onBackToMain }: Props)
               {expanded &&
                 earlier.map((message, index) => (
                   <div key={`${item.key}-older-${index}`} className="tool-stack-layer">
-                    <TranscriptEntry message={message} />
+                    <TranscriptEntry message={message} githubRepo={githubRepo} />
                   </div>
                 ))}
               <div className="tool-stack-layer latest">
-                <TranscriptEntry message={latest} />
+                <TranscriptEntry message={latest} githubRepo={githubRepo} />
               </div>
             </div>
           </div>

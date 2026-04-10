@@ -16,6 +16,7 @@ export interface State {
   action: string;
   isSpeaking: boolean;
   connected: boolean;
+  githubRepo: string | null;
 }
 
 const initialState: State = {
@@ -28,6 +29,7 @@ const initialState: State = {
   action: "connecting...",
   isSpeaking: false,
   connected: false,
+  githubRepo: null,
 };
 
 type Action =
@@ -113,6 +115,9 @@ function reducer(state: State, action: Action): State {
 
     case "action":
       return { ...state, action: msg.text };
+
+    case "repo_context":
+      return { ...state, githubRepo: msg.repo };
 
     default:
       return state;
