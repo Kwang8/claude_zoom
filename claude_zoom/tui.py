@@ -12,16 +12,21 @@ UI animations keep running.
 
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+log = logging.getLogger("claude_zoom")
+
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Paste
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Header, Label, Static, TextArea
@@ -185,6 +190,27 @@ def _normalize_language(lang: str | None) -> str | None:
     key = lang.lower().strip()
     key = _LANG_ALIASES.get(key, key)
     return key if key in _SUPPORTED_LANGS else None
+
+
+# ─── Image drag-and-drop support ───────────────────────────────────────────
+
+_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"})
+
+
+def _extract_dropped_image_path(text: str) -> str | None:
+    """Return a clean image path if *text* looks like a dragged image file.
+
+    On macOS, dragging a file from Finder to a terminal pastes its path,
+    wrapped in single quotes when the path contains spaces.
+    """
+    stripped = text.strip()
+    # Strip surrounding quotes that macOS adds for paths with spaces.
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ("'", '"'):
+        stripped = stripped[1:-1]
+    _, ext = os.path.splitext(stripped.lower())
+    if ext in _IMAGE_EXTS and os.path.isfile(stripped):
+        return stripped
+    return None
 
 
 # ─── Widgets ───────────────────────────────────────────────────────────────
@@ -792,6 +818,7 @@ class ChatApp(App):
         Binding("q", "quit", "quit"),
         Binding("space", "toggle_mic", "mic", priority=True),
         Binding("escape", "cancel_turn", "cancel turn"),
+        Binding("i", "clear_images", "clear images"),
     ]
 
     def __init__(self, session: "ClaudeSession") -> None:
@@ -812,6 +839,8 @@ class ChatApp(App):
         # Smart routing: tracks which sub-agent last spoke so the next
         # user message can be auto-routed to it.
         self._last_sub_speaker_id: str | None = None
+        # Images dragged/pasted into the TUI — forwarded to Claude and sub-agents.
+        self._image_context: list[str] = []
 
         from .agents import AgentManager, SpeechQueue
         from .coordinator import CoordinatorAgent
@@ -865,6 +894,33 @@ class ChatApp(App):
         self._agent_manager.kill_all()
         self.exit()
 
+    def action_clear_images(self) -> None:
+        if not self._image_context:
+            return
+        n = len(self._image_context)
+        self._image_context.clear()
+        self._append_message("system", f"cleared {n} image(s) from context")
+        self._update_image_hint()
+
+    def on_paste(self, event: Paste) -> None:
+        """Detect image file paths pasted/dragged into the terminal."""
+        path = _extract_dropped_image_path(event.text)
+        if path is None:
+            return
+        event.stop()
+        self._image_context.append(path)
+        self._append_message("system", f"image attached: {os.path.basename(path)}")
+        self._update_image_hint()
+
+    def _update_image_hint(self) -> None:
+        status = self.query_one(StatusBar)
+        base = "q quit · space talk · esc cancel"
+        if self._image_context:
+            n = len(self._image_context)
+            status.hint = f"{base} · i:clear {n} img{'s' if n != 1 else ''}"
+        else:
+            status.hint = base
+
     # ─── Main worker: push-to-talk voice loop ─────────────────────────────
 
     @work(thread=True, exclusive=True)
@@ -901,6 +957,7 @@ class ChatApp(App):
             self._main_idle.clear()
 
             # ── LISTEN ──
+            log.debug("listen phase start")
             turn += 1
             self._cancel_recording.clear()
             self._set_state("listening", "")
@@ -928,14 +985,48 @@ class ChatApp(App):
                 self._set_action("cancelled")
                 continue
 
+            log.debug("transcribe phase start")
             self._set_state("thinking", "")
             self._set_action("transcribing...")
-            try:
-                transcript = recorder.stop_and_transcribe()
-            except Exception as e:  # noqa: BLE001
-                self._set_action(f"transcribe error: {str(e)[:60]}")
+
+            # Run transcription in a thread so escape can interrupt it.
+            _transcribe_result: list[str | None] = [None]
+            _transcribe_error: list[Exception | None] = [None]
+            _transcribe_cancelled = False
+
+            def _do_transcribe() -> None:
+                try:
+                    _transcribe_result[0] = recorder.stop_and_transcribe()
+                except Exception as e:  # noqa: BLE001
+                    _transcribe_error[0] = e
+
+            t = threading.Thread(target=_do_transcribe, daemon=True)
+            t.start()
+            while t.is_alive():
+                if self._cancel_recording.is_set():
+                    log.debug("cancel during transcribe — aborting")
+                    self._cancel_recording.clear()
+                    _transcribe_cancelled = True
+                    recorder.close()
+                    self._set_state("idle", "")
+                    self._set_action("cancelled")
+                    break
+                if self._stop_flag.is_set():
+                    recorder.close()
+                    break
+                t.join(timeout=0.1)
+
+            if _transcribe_cancelled or self._stop_flag.is_set():
+                # Clear mic_event so the idle loop doesn't immediately fire.
+                self._mic_event.clear()
+                continue
+            if not t.is_alive():
+                t.join()
+            if _transcribe_error[0] is not None:
+                self._set_action(f"transcribe error: {str(_transcribe_error[0])[:60]}")
                 self._set_state("idle", "")
                 continue
+            transcript = _transcribe_result[0]
 
             if not transcript:
                 self._set_action("(no input)")
@@ -944,6 +1035,7 @@ class ChatApp(App):
 
             if turn == 0:
                 turn += 1
+            log.info("transcript: %s", transcript[:120] if transcript else "(empty)")
             self._append_message("user", transcript)
             self._set_action(f"heard: {transcript[:60]}")
 
@@ -1093,7 +1185,8 @@ class ChatApp(App):
             early_text: str = ""
             has_tool_calls = False
             try:
-                for event in self.session.send(_prompt):
+                prompt = _build_prompt_with_images(_prompt, self._image_context)
+                for event in self.session.send(prompt):
                     events.append(event)
                     if event.get("type") == "assistant":
                         content = (event.get("message") or {}).get("content") or []
@@ -1261,7 +1354,7 @@ class ChatApp(App):
         """Create a sub-agent and add its panel to the sidebar."""
         base_cwd = self.session.cwd or "."
         agent = self._agent_manager.spawn(
-            task=task,
+            task=_build_prompt_with_images(task, self._image_context),
             name=name,
             base_cwd=base_cwd,
             model="sonnet",
@@ -1386,6 +1479,18 @@ class ChatApp(App):
 
 def _escape(text: str) -> str:
     return text.replace("[", r"\[").replace("]", r"\]")
+
+
+def _build_prompt_with_images(prompt: str, images: list[str]) -> str:
+    """Append image file paths to *prompt* so Claude can Read them."""
+    if not images:
+        return prompt
+    paths = "\n".join(f"  - {p}" for p in images)
+    return (
+        f"{prompt}\n\n"
+        f"[The user has attached the following image files as context. "
+        f"Use the Read tool to view them as needed.]\n{paths}"
+    )
 
 
 def _strip_spawn_markers(text: str) -> str:

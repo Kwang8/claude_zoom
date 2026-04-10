@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 import click
@@ -53,7 +54,13 @@ def main() -> None:
     default=None,
     help="Override the default voice-friendly append-system-prompt for Claude.",
 )
-def chat(cwd, model, permission_mode, append_system_prompt) -> None:
+@click.option(
+    "--log-file",
+    default=None,
+    type=click.Path(),
+    help="Write debug logs to this file (e.g. claude_zoom.log).",
+)
+def chat(cwd, model, permission_mode, append_system_prompt, log_file) -> None:
     """Voice-chat with a live Claude Code instance.
 
     Listens on your mic, sends your spoken request to a live `claude -p`
@@ -61,6 +68,13 @@ def chat(cwd, model, permission_mode, append_system_prompt) -> None:
     speaks a short summary of each turn. Session is preserved across turns
     via --resume, so you can have a real conversation.
     """
+    if log_file:
+        logging.basicConfig(
+            filename=log_file,
+            level=logging.DEBUG,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
+
     try:
         from .voice import warm_up
     except ImportError as e:
