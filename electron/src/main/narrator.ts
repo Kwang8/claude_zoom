@@ -6,11 +6,18 @@ const MAX_TRANSCRIPT_CHARS = 8_000;
 const MAX_FAST_PATH_WORDS = 30;
 
 const NARRATOR_SYSTEM_PROMPT = `\
-Rewrite the events below as ONE spoken sentence, under 25 words, first-person \
-past tense, describing the OUTCOME. No filler, no markdown, no code.
-USER ASKED: {user_message}
-EVENTS:
-{transcript}`;
+You rewrite an internal tool transcript into one short spoken status update.
+
+Return exactly one sentence, under 20 words.
+Focus on the concrete outcome, not the process.
+Prefer first-person past tense when natural.
+
+Rules:
+- Mention what changed, what was found, or what blocked progress
+- Do not mention tools, files, transcripts, or "events"
+- Do not use markdown, bullets, code, or quotes
+- Do not add filler such as "Okay", "Done", or "Here's what happened"
+- If the turn failed or was blocked, say that plainly in one sentence`;
 
 const MARKDOWN_RE = /[`*#>\[\]]|```/;
 
@@ -137,9 +144,10 @@ function sonnetSummarize(
     transcript = transcript.slice(0, MAX_TRANSCRIPT_CHARS) + "\n...(truncated)";
   }
 
-  const systemPrompt = NARRATOR_SYSTEM_PROMPT
-    .replace("{user_message}", userMessage || "(silent)")
-    .replace("{transcript}", transcript);
+  const prompt =
+    `USER REQUEST:\n${userMessage || "(silent)"}\n\n` +
+    `TURN TRANSCRIPT:\n${transcript}\n\n` +
+    "Summarize the outcome for speech.";
 
   return new Promise((resolve, reject) => {
     const proc = execFile(
@@ -148,7 +156,7 @@ function sonnetSummarize(
         "-p",
         "--output-format", "json",
         "--model", MODEL,
-        "--system-prompt", systemPrompt,
+        "--system-prompt", NARRATOR_SYSTEM_PROMPT,
       ],
       { timeout: 30_000 },
       (err, stdout, stderr) => {
@@ -168,7 +176,7 @@ function sonnetSummarize(
         }
       }
     );
-    proc.stdin?.write("Summarize.");
+    proc.stdin?.write(prompt);
     proc.stdin?.end();
   });
 }
