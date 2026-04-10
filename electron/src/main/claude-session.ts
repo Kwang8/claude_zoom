@@ -1,5 +1,28 @@
-import { ChildProcess, spawn } from "child_process";
+import { ChildProcess, execFileSync, spawn } from "child_process";
 import readline from "readline";
+
+// Resolve the absolute path to `claude` once at startup so spawn never
+// gets ENOENT inside Electron (which has a stripped-down PATH).
+let _claudePath: string | null = null;
+export function getClaudePath(): string {
+  if (_claudePath) return _claudePath;
+  try {
+    _claudePath = execFileSync("which", ["claude"], { encoding: "utf-8" }).trim();
+  } catch {
+    // Fallback common locations
+    const candidates = [
+      "/opt/homebrew/bin/claude",
+      "/usr/local/bin/claude",
+      `${process.env.HOME}/.npm-global/bin/claude`,
+    ];
+    const fs = require("fs");
+    for (const c of candidates) {
+      if (fs.existsSync(c)) { _claudePath = c; break; }
+    }
+  }
+  if (!_claudePath) _claudePath = "claude"; // last resort
+  return _claudePath;
+}
 
 export const DEFAULT_APPEND_SYSTEM_PROMPT = `\
 You are being invoked via a voice interface. A fast model will summarize your \
@@ -12,21 +35,21 @@ IMPORTANT — sub-agent spawning: You can spawn sub-agents that run in parallel 
 in isolated git worktrees. To spawn one, emit this block in your response:
 <SPAWN name="short-name">detailed task description for the sub-agent</SPAWN>
 
-You SHOULD aggressively spawn sub-agents. Whenever the user asks you to do \
-something that involves reading code, making changes, researching, running \
-tests, or any non-trivial work: respond with a brief conversational \
-acknowledgment AND a SPAWN block to delegate the actual work. For example:
-- User: "how does the voice module work?" -> respond "Let me look into that" + \
-  SPAWN a researcher
-- User: "can you improve the character art?" -> respond "Sure, I'll kick that \
-  off" + SPAWN a worker
-- User: "make this a better product" -> respond conversationally + SPAWN \
-  multiple researchers for different aspects
+Spawn sub-agents for substantial, time-consuming, or parallelizable work:
+- Exploring a large codebase or doing multi-file research
+- Implementing a feature or making significant code changes
+- Running a full test suite or doing a long investigation
+- Work that naturally splits into independent parallel tasks (e.g. "look into X and Y")
 
-Spawn FIRST, then keep your text response SHORT. You may spawn multiple per \
-turn. The sub-agent reports back via voice when done. This keeps the voice \
-experience fast — the user gets an instant reply from you while the real work \
-happens in the background.`;
+Do NOT spawn sub-agents for quick, single-step operations — handle these directly:
+- Simple git commands (git pull, git fetch, git merge, git status, git log)
+- Reading a single file or running one shell command
+- Answering a factual question about the codebase
+- Any task completable in one or two tool calls
+
+For quick tasks: just do them directly and report the result. \
+For substantial work: spawn FIRST, keep your text response SHORT. \
+You may spawn multiple per turn. The sub-agent reports back via voice when done.`;
 
 export class ClaudeSession {
   cwd: string | null;
@@ -69,12 +92,17 @@ export class ClaudeSession {
     }
 
     this._cancelled = false;
-    this._proc = spawn("claude", args, {
+    this._proc = spawn(getClaudePath(), args, {
       cwd: this.cwd || undefined,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
     const proc = this._proc;
+
+    // Prevent uncaught ENOENT from crashing the process
+    proc.on("error", (err) => {
+      console.error("[claude-session] spawn error:", err.message);
+    });
 
     // Collect stderr from the start
     const stderrChunks: Buffer[] = [];

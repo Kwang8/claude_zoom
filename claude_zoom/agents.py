@@ -382,10 +382,15 @@ class AgentInstance:
     pending_question: str | None = None  # set when status == "needs_input"
 
 
+def format_agent_display_name(agent: AgentInstance) -> str:
+    """Visible sub-agent label with both number and short name."""
+    prefix = "remote agent" if agent.remote else "agent"
+    return f"{prefix} {agent.number} ({agent.name})"
+
+
 def _agent_label(agent: AgentInstance) -> str:
     """Human-readable label for transcript + spoken updates."""
-    prefix = "[remote agent]" if agent.remote else "agent"
-    return f"{prefix} {agent.name}"
+    return format_agent_display_name(agent)
 
 
 class AgentManager:

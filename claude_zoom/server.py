@@ -28,6 +28,7 @@ from .agents import (
     AgentManager,
     SpeechQueue,
     classify_message_target,
+    format_agent_display_name,
     parse_agent_target,
     parse_spawn_markers,
     parse_voice_trigger,
@@ -247,6 +248,7 @@ class ChatEngine:
         """Forward user answer to agent question."""
         agent = self._agent_manager.agents.get(agent_id)
         if agent and agent.status == "needs_input":
+            display_name = format_agent_display_name(agent)
             self._agent_manager.handle_agent_question(
                 agent_id, text,
                 on_event=self._on_sub_event,
@@ -254,9 +256,9 @@ class ChatEngine:
             )
             self._send(
                 "agent_status", agent_id=agent_id,
-                status="working", name=agent.name
+                status="working", name=display_name
             )
-            ack = f"Got it, forwarding your answer to agent {agent.name}."
+            ack = f"Got it, forwarding your answer to {display_name}."
             self._send_transcript("claude", ack)
             self._speak(ack)
         self._awaiting_question_agent_id = None
@@ -425,9 +427,8 @@ class ChatEngine:
                 trigger_task, trigger_remote = trigger
                 name = _extract_agent_name(trigger_task)
                 try:
-                    self._spawn_sub(name, trigger_task, remote=trigger_remote)
-                    kind = "remote agent" if trigger_remote else "agent"
-                    ack = f"On it! Kicked off {kind} {name}."
+                    agent = self._spawn_sub(name, trigger_task, remote=trigger_remote)
+                    ack = f"On it! Kicked off {format_agent_display_name(agent)}."
                     self._send_transcript("claude", ack)
                     self._send_state("talking", ack)
                     self._speak(ack)
@@ -556,9 +557,10 @@ class ChatEngine:
     def _route_to_agent(
         self, agent: AgentInstance, msg: str, suffix: str = ""
     ) -> None:
+        display_name = format_agent_display_name(agent)
         if agent.status == "working":
             agent.task_queue.append(msg)
-            ack = f"Queued that for agent {agent.name}."
+            ack = f"Queued that for {display_name}."
         else:
             self._agent_manager.send_to_agent(
                 agent, msg,
@@ -567,9 +569,9 @@ class ChatEngine:
             )
             self._send(
                 "agent_status", agent_id=agent.id,
-                status="working", name=agent.name
+                status="working", name=display_name
             )
-            ack = f"Sent to agent {agent.name}."
+            ack = f"Sent to {display_name}."
         if suffix:
             ack = f"{ack} {suffix}"
         self._send_transcript("claude", ack)
@@ -660,7 +662,9 @@ class ChatEngine:
 
     # ── Sub-agent helpers ────────────────────────────────────────────────
 
-    def _spawn_sub(self, name: str, task: str, *, remote: bool = False) -> None:
+    def _spawn_sub(
+        self, name: str, task: str, *, remote: bool = False
+    ) -> AgentInstance:
         base_cwd = self.session.cwd or "."
         repo = self.remote_repo
         if remote and not repo:
@@ -688,21 +692,32 @@ class ChatEngine:
         self._send(
             "agent_spawned",
             agent_id=agent.id,
-            name=agent.name,
+            name=format_agent_display_name(agent),
             number=agent.number,
             task=task,
         )
-        self._send_transcript("system", f'spawned agent "{name}"')
+        self._send_transcript(
+            "system",
+            f'spawned {format_agent_display_name(agent)}',
+        )
         self._coordinator.notify_spawn(agent.id, agent.name, task)
+        return agent
 
     def _on_sub_event(self, agent_id: str, event: dict) -> None:
         if event.get("type") != "assistant":
             return
+        agent = self._agent_manager.agents.get(agent_id)
         content = (event.get("message") or {}).get("content") or []
         for item in content:
             if item.get("type") == "tool_use":
                 tname = item.get("name", "?")
                 short = summarize_tool_args(tname, item.get("input") or {})
+                if agent:
+                    self._send_transcript(
+                        "system",
+                        f"{tname}({short})",
+                        agent_name=format_agent_display_name(agent),
+                    )
                 self._send(
                     "agent_status", agent_id=agent_id,
                     status="working", ticker=f"{tname}({short})",
@@ -716,7 +731,7 @@ class ChatEngine:
             )
             self._send(
                 "agent_status", agent_id=agent_id,
-                status=agent.status, name=agent.name,
+                status=agent.status, name=format_agent_display_name(agent),
             )
 
     # ── State persistence ────────────────────────────────────────────────
@@ -788,7 +803,7 @@ class ChatEngine:
             self._send(
                 "agent_spawned",
                 agent_id=a.id,
-                name=a.name,
+                name=format_agent_display_name(agent),
                 number=a.number,
                 task=a.task,
                 status=a.status,
@@ -800,7 +815,11 @@ class ChatEngine:
                 self._awaiting_pr_agent_id = a.id
 
         n = len(state.agents)
-        names = ", ".join(a.name for a in state.agents)
+        names = ", ".join(
+            format_agent_display_name(self._agent_manager.agents[a.id])
+            for a in state.agents
+            if a.id in self._agent_manager.agents
+        )
         if n:
             intro = (
                 f"Welcome back! Resumed previous session with {n} "
@@ -849,7 +868,7 @@ async def _handle_client(
             await websocket.send(json.dumps({
                 "type": "agent_spawned",
                 "agent_id": a.id,
-                "name": a.name,
+                "name": format_agent_display_name(a),
                 "number": a.number,
                 "task": a.task,
                 "status": a.status,

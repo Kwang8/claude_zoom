@@ -4,6 +4,7 @@ import {
   AgentManager,
   SpeechQueue,
   classifyMessageTarget,
+  formatAgentDisplayName,
   inferGithubRepo,
   parseAgentTarget,
   parseSpawnMarkers,
@@ -294,13 +295,14 @@ export class ChatEngine {
   agentAnswer(agentId: string, text: string): void {
     const agent = this._agentManager.agents.get(agentId);
     if (agent && agent.status === "needs_input") {
+      const displayName = formatAgentDisplayName(agent);
       this._agentManager.handleAgentQuestion(
         agentId, text,
         (id, ev) => this._onSubEvent(id, ev),
         (id) => this._onSubDone(id),
       );
-      this._send("agent_status", { agent_id: agentId, status: "working", name: agent.name });
-      const ack = `Got it, forwarding your answer to agent ${agent.name}.`;
+      this._send("agent_status", { agent_id: agentId, status: "working", name: displayName });
+      const ack = `Got it, forwarding your answer to ${displayName}.`;
       this._sendTranscript("claude", ack);
       this._speak(ack);
     }
@@ -399,7 +401,7 @@ export class ChatEngine {
       this._emit({
         type: "agent_spawned",
         agent_id: a.id,
-        name: a.name,
+        name: formatAgentDisplayName(a),
         number: a.number,
         task: a.task,
         status: a.status,
@@ -535,9 +537,8 @@ export class ChatEngine {
       const [triggerTask, triggerRemote] = trigger;
       const name = extractAgentName(triggerTask);
       try {
-        this._spawnSub(name, triggerTask, triggerRemote);
-        const kind = triggerRemote ? "remote agent" : "agent";
-        const ack = `On it! Kicked off ${kind} ${name}.`;
+        const agent = this._spawnSub(name, triggerTask, triggerRemote);
+        const ack = `On it! Kicked off ${formatAgentDisplayName(agent)}.`;
         this._sendTranscript("claude", ack);
         this._sendState("talking", ack);
         await this._speak(ack);
@@ -680,18 +681,19 @@ export class ChatEngine {
     suffix: string = ""
   ): Promise<void> {
     const rewritten = rewriteDirectedAgentMessage(agent.name, msg);
+    const displayName = formatAgentDisplayName(agent);
     let ack: string;
     if (agent.status === "working") {
       agent.taskQueue.push(rewritten);
-      ack = `Queued that for agent ${agent.name}.`;
+      ack = `Queued that for ${displayName}.`;
     } else {
       this._agentManager.sendToAgent(
         agent, rewritten,
         (id, ev) => this._onSubEvent(id, ev),
         (id) => this._onSubDone(id),
       );
-      this._send("agent_status", { agent_id: agent.id, status: "working", name: agent.name });
-      ack = `Sent to agent ${agent.name}.`;
+      this._send("agent_status", { agent_id: agent.id, status: "working", name: displayName });
+      ack = `Sent to ${displayName}.`;
     }
     if (suffix) ack = `${ack} ${suffix}`;
     this._sendTranscript("claude", ack);
@@ -792,7 +794,7 @@ export class ChatEngine {
 
   // ── Sub-agent helpers ──
 
-  private _spawnSub(name: string, task: string, remote: boolean = false): void {
+  private _spawnSub(name: string, task: string, remote: boolean = false): AgentInstance {
     const baseCwd = this.session.cwd || ".";
     let repo = this._remoteRepo;
     if (remote && !repo) {
@@ -817,12 +819,12 @@ export class ChatEngine {
     });
     this._send("agent_spawned", {
       agent_id: agent.id,
-      name: agent.name,
+      name: formatAgentDisplayName(agent),
       number: agent.number,
       task,
       status: agent.status,
     });
-    this._sendTranscript("system", `spawned ${remote ? "remote " : ""}agent "${name}"`);
+    this._sendTranscript("system", `spawned ${formatAgentDisplayName(agent)}`);
     if (this._currentConvId) {
       const conv = this._convLog.find((c) => c.id === this._currentConvId);
       if (conv) conv.spawned_agent_ids.push(agent.id);
@@ -833,6 +835,7 @@ export class ChatEngine {
     }
     this._coordinator.notifySpawn(agent.id, agent.name, task);
     this._scheduleStateSave();
+    return agent;
   }
 
   private _onSubEvent(agentId: string, event: Record<string, any>): void {
@@ -844,7 +847,13 @@ export class ChatEngine {
         const tname = item.name || "?";
         const short = summarizeToolArgs(tname, item.input || {});
         if (agent) {
-          this._sendTranscript("system", `${tname}(${short})`, agent.name, agent.id, "tool_use");
+          this._sendTranscript(
+            "system",
+            `${tname}(${short})`,
+            formatAgentDisplayName(agent),
+            agent.id,
+            "tool_use"
+          );
         }
         this._send("agent_status", {
           agent_id: agentId,
@@ -862,7 +871,7 @@ export class ChatEngine {
       this._send("agent_status", {
         agent_id: agentId,
         status: agent.status,
-        name: agent.name,
+        name: formatAgentDisplayName(agent),
       });
       this._scheduleStateSave();
     }
@@ -987,7 +996,7 @@ export class ChatEngine {
       this._agentManager.agents.set(a.id, agent);
       this._send("agent_spawned", {
         agent_id: a.id,
-        name: a.name,
+        name: formatAgentDisplayName(agent),
         number: a.number,
         task: a.task,
         status: a.status,
@@ -1001,7 +1010,11 @@ export class ChatEngine {
     }
 
     const n = state.agents.length;
-    const names = state.agents.map((a) => a.name).join(", ");
+    const names = state.agents
+      .map((a) => this._agentManager.agents.get(a.id))
+      .filter((agent): agent is AgentInstance => Boolean(agent))
+      .map((agent) => formatAgentDisplayName(agent))
+      .join(", ");
     const intro = n
       ? `Welcome back! Resumed previous session with ${n} agent${n !== 1 ? "s" : ""}: ${names}. Press space to talk.`
       : "Welcome back! Resumed previous session. Press space to talk.";

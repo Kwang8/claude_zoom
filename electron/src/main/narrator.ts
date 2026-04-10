@@ -1,5 +1,5 @@
 import { execFile } from "child_process";
-import { eventsToTranscript } from "./claude-session";
+import { eventsToTranscript, getClaudePath } from "./claude-session";
 
 const MODEL = "sonnet";
 const MAX_TRANSCRIPT_CHARS = 8_000;
@@ -102,7 +102,7 @@ export function checkConversationComplete(
 
   return new Promise((resolve) => {
     const proc = execFile(
-      "claude",
+      getClaudePath(),
       [
         "-p",
         "--output-format", "json",
@@ -151,7 +151,7 @@ function sonnetSummarize(
 
   return new Promise((resolve, reject) => {
     const proc = execFile(
-      "claude",
+      getClaudePath(),
       [
         "-p",
         "--output-format", "json",

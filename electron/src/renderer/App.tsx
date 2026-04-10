@@ -100,7 +100,7 @@ export function App() {
   const selectedAgent = state.agents.find((agent) => agent.agent_id === selectedAgentId) || null;
   const agentTranscript = selectedAgent
     ? state.transcript.filter((message) => message.agent_id === selectedAgent.agent_id)
-    : state.transcript.filter(message.kind !== "tool_use");
+    : state.transcript.filter((message) => message.kind !== "tool_use");
 
   // Determine what main area shows
   let mainContent: React.ReactNode;

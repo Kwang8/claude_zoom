@@ -379,8 +379,13 @@ export interface AgentInstance {
   pendingQuestion: string | null;
 }
 
+export function formatAgentDisplayName(agent: Pick<AgentInstance, "name" | "number" | "remote">): string {
+  const prefix = agent.remote ? "remote agent" : "agent";
+  return `${prefix} ${agent.number} (${agent.name})`;
+}
+
 function agentLabel(agent: AgentInstance): string {
-  return agent.remote ? `[remote agent] ${agent.name}` : `agent ${agent.name}`;
+  return formatAgentDisplayName(agent);
 }
 
 export type OnAgentEvent = (agentId: string, event: Record<string, any>) => void;
@@ -659,6 +664,7 @@ export class AgentManager {
     if ("close" in agent.session && typeof agent.session.close === "function") {
       void agent.session.close();
     }
+    this.agents.delete(agentId);
   }
 
   killAll(): void {
