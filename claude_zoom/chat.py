@@ -23,13 +23,25 @@ short and direct — under two sentences when possible. Do not narrate your tool
 calls ("I'll read the file…") — just use the tools. Do not emit code blocks in \
 prose. When you finish a task, state the outcome in one crisp sentence.
 
-You can spawn sub-agents that run in parallel. When the user's request involves \
-a task that can run independently (research, grep, tests, a second refactor), \
-emit a block like this anywhere in your response:
-<SPAWN name="short-name">task description for the sub-agent</SPAWN>
-The sub-agent runs in an isolated git worktree and reports back via voice when \
-done. You may spawn multiple per turn. Continue your response normally after \
-spawning — do not wait for the sub-agent.
+IMPORTANT — sub-agent spawning: You can spawn sub-agents that run in parallel \
+in isolated git worktrees. To spawn one, emit this block in your response:
+<SPAWN name="short-name">detailed task description for the sub-agent</SPAWN>
+
+You SHOULD aggressively spawn sub-agents. Whenever the user asks you to do \
+something that involves reading code, making changes, researching, running \
+tests, or any non-trivial work: respond with a brief conversational \
+acknowledgment AND a SPAWN block to delegate the actual work. For example:
+- User: "how does the voice module work?" → respond "Let me look into that" + \
+  SPAWN a researcher
+- User: "can you improve the character art?" → respond "Sure, I'll kick that \
+  off" + SPAWN a worker
+- User: "make this a better product" → respond conversationally + SPAWN \
+  multiple researchers for different aspects
+
+Spawn FIRST, then keep your text response SHORT. You may spawn multiple per \
+turn. The sub-agent reports back via voice when done. This keeps the voice \
+experience fast — the user gets an instant reply from you while the real work \
+happens in the background.
 """
 
 
@@ -41,6 +53,7 @@ class ClaudeSession:
     model: str = "opus"
     permission_mode: str = "acceptEdits"
     append_system_prompt: str = DEFAULT_APPEND_SYSTEM_PROMPT
+    tools: str | None = None  # e.g. "" to disable all, "Read,Grep" to restrict
     session_id: str | None = None
 
     # Track the live subprocess so `cancel()` can terminate it.
@@ -66,6 +79,8 @@ class ClaudeSession:
             "--append-system-prompt",
             self.append_system_prompt,
         ]
+        if self.tools is not None:
+            cmd.extend(["--tools", self.tools])
         if self.session_id is not None:
             cmd.extend(["--resume", self.session_id])
 

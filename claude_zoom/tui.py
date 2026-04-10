@@ -22,6 +22,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Header, Label, Static, TextArea
 
@@ -649,6 +650,13 @@ class ActivityTicker(Static):
 class MiniAgentPanel(Static):
     """Compact card for one sub-agent in the sidebar."""
 
+    class DeleteRequest(Message):
+        """Posted when the user clicks the delete button."""
+
+        def __init__(self, agent_id: str) -> None:
+            super().__init__()
+            self.agent_id = agent_id
+
     DEFAULT_CSS = """
     MiniAgentPanel {
         height: auto;
@@ -685,11 +693,15 @@ class MiniAgentPanel(Static):
 
     def _refresh_content(self) -> None:
         icon = self._STATE_ICONS.get(self.agent_state, "?")
-        line1 = f"{icon} [bold]{_escape(self.agent_name)}[/bold]"
+        delete_btn = " [red][b]\\[x][/b][/red]"
+        line1 = f"{icon} [bold]{_escape(self.agent_name)}[/bold]{delete_btn}"
         line2 = ""
         if self.ticker:
             line2 = f"\n  [dim]{_escape(self.ticker[:40])}[/dim]"
         self.update(f"{line1}{line2}")
+
+    def on_click(self) -> None:
+        self.post_message(self.DeleteRequest(self.agent_id))
 
 
 class AgentSidebar(VerticalScroll):
@@ -714,11 +726,35 @@ class AgentSidebar(VerticalScroll):
         yield Static("[dim]── sub agents ──[/dim]", id="sub-agents-header")
 
 
+_STOP_WORDS: set[str] = {
+    "the", "a", "an", "this", "that", "and", "or", "for", "in", "on", "to",
+    "with", "of", "is", "are", "was", "were", "be", "been", "do", "does",
+    "did", "will", "would", "could", "should", "can", "may", "might",
+    "shall", "has", "have", "had", "it", "its", "my", "your", "our",
+    "their", "all", "some", "any", "each", "every", "very", "just", "also",
+    "so", "if", "but", "not", "no", "at", "by", "from", "up", "out",
+    "about", "into", "over", "after", "before", "between", "under",
+    "through", "during", "without", "within", "along", "following",
+    "across", "behind", "beyond", "plus", "except", "since", "toward",
+    "towards", "upon", "whether", "while", "although", "though", "because",
+    "unless", "until", "that", "which", "who", "whom", "whose", "where",
+    "when", "how", "what", "why", "let", "me", "us", "them", "him", "her",
+    "please", "go", "look", "make", "take", "get", "give", "come", "know",
+    "think", "see", "want", "use",
+}
+
+
 def _extract_agent_name(task: str) -> str:
-    """Best-effort short name from the first few words of a task."""
-    words = task.split()[:2]
-    name = "-".join(w.lower().strip(".,!?;:") for w in words)
-    return name[:20] if name else "task"
+    """Best-effort short name from the most meaningful 2-3 words of a task."""
+    words = task.split()
+    meaningful = [
+        w.lower().strip(".,!?;:\"'()[]{}") for w in words
+        if w.lower().strip(".,!?;:\"'()[]{}") and
+        w.lower().strip(".,!?;:\"'()[]{}") not in _STOP_WORDS
+    ]
+    chosen = meaningful[:3] if meaningful else ["task"]
+    name = "-".join(chosen)
+    return name[:24] if name else "task"
 
 
 class ChatApp(App):
@@ -837,8 +873,14 @@ class ChatApp(App):
             self._set_progress(f"turn {turn}")
             self._set_action("recording — press SPACE to send")
             recorder = Recorder()
+
+            def _on_partial(text: str) -> None:
+                """Called from the partial-transcription thread."""
+                self._set_state("listening", f"[dim](heard so far)[/dim] {text}")
+                self._set_action(f"recording — {text[:50]}")
+
             try:
-                recorder.start()
+                recorder.start(on_partial_transcript=_on_partial)
             except Exception as e:  # noqa: BLE001
                 self._set_action(f"mic error: {str(e)[:60]}")
                 self._set_state("idle", "")
@@ -881,9 +923,14 @@ class ChatApp(App):
                 continue
 
             # ── WORK (main agent) ──
+            # Speak Claude's first text response immediately while tool
+            # calls keep streaming, so the user doesn't wait.
             self._set_state("working", "")
             self._set_action("claude is working...")
             events: list[dict] = []
+            early_speech_thread: threading.Thread | None = None
+            early_text: str = ""
+            has_tool_calls = False
             try:
                 for event in self.session.send(transcript):
                     events.append(event)
@@ -891,6 +938,7 @@ class ChatApp(App):
                         content = (event.get("message") or {}).get("content") or []
                         for item in content:
                             if item.get("type") == "tool_use":
+                                has_tool_calls = True
                                 tname = item.get("name", "?")
                                 short = summarize_tool_args(
                                     tname, item.get("input") or {}
@@ -903,6 +951,20 @@ class ChatApp(App):
                                         self._spawn_sub(sname, stask)
                                     except Exception:  # noqa: BLE001
                                         pass
+                                # Speak the first text immediately in
+                                # background so the user hears something
+                                # while tools keep running.
+                                cleaned = _strip_spawn_markers(text).strip()
+                                if not early_text and cleaned:
+                                    early_text = cleaned
+                                    self._append_message("claude", early_text)
+                                    self._set_state("talking", early_text)
+                                    early_speech_thread = threading.Thread(
+                                        target=self._speak_main,
+                                        args=(early_text,),
+                                        daemon=True,
+                                    )
+                                    early_speech_thread.start()
             except Exception as e:  # noqa: BLE001
                 self._append_message("claude_error", f"{e}")
                 self._set_state("idle", "")
@@ -913,21 +975,30 @@ class ChatApp(App):
             if self._stop_flag.is_set():
                 break
 
-            # ── SUMMARIZE + SPEAK ──
-            self._set_state("thinking", "")
-            self._set_action("summarizing...")
-            self._set_ticker("")
-            try:
-                summary = summarize_turn(transcript, events)
-            except Exception as e:  # noqa: BLE001
-                summary = f"Hit an error while summarizing: {e}"
+            # Wait for early speech to finish before deciding next step.
+            if early_speech_thread is not None:
+                early_speech_thread.join(timeout=30)
 
-            if not summary:
-                summary = "Done."
-            self._append_message("claude", summary)
-            self._set_state("talking", summary)
-            self._set_action("speaking (press SPACE to interrupt)")
-            self._speak_main(summary)
+            # ── SUMMARIZE + SPEAK (only if tools ran) ──
+            self._set_ticker("")
+            if has_tool_calls:
+                self._set_state("thinking", "")
+                self._set_action("summarizing results...")
+                try:
+                    summary = summarize_turn(transcript, events)
+                except Exception as e:  # noqa: BLE001
+                    summary = f"Hit an error while summarizing: {e}"
+                if summary:
+                    self._append_message("claude", summary)
+                    self._set_state("talking", summary)
+                    self._set_action("speaking (press SPACE to interrupt)")
+                    self._speak_main(summary)
+            elif not early_text:
+                # No text and no tools — fallback.
+                self._append_message("claude", "Done.")
+                self._set_state("talking", "Done.")
+                self._set_action("speaking (press SPACE to interrupt)")
+                self._speak_main("Done.")
 
         self._set_action("bye")
 
@@ -1078,6 +1149,19 @@ class ChatApp(App):
 
         self._call(_update)
 
+    def on_mini_agent_panel_delete_request(
+        self, event: MiniAgentPanel.DeleteRequest
+    ) -> None:
+        """Handle delete button click on a sub-agent panel."""
+        agent_id = event.agent_id
+        self._agent_manager.kill(agent_id)
+        self._agent_manager.remove(agent_id)
+        try:
+            panel = self.query_one(f"#agent-{agent_id}", MiniAgentPanel)
+            panel.remove()
+        except Exception:  # noqa: BLE001
+            pass
+
     # ─── Main-thread helpers ───────────────────────────────────────────────
 
     def _call(self, fn, *args, **kwargs) -> None:
@@ -1117,6 +1201,18 @@ class ChatApp(App):
 
 def _escape(text: str) -> str:
     return text.replace("[", r"\[").replace("]", r"\]")
+
+
+def _strip_spawn_markers(text: str) -> str:
+    """Remove ``<SPAWN ...>...</SPAWN>`` blocks so they aren't spoken aloud."""
+    import re
+
+    return re.sub(
+        r"<SPAWN\s+name=[\"'][^\"']+[\"']\s*>.*?</SPAWN>",
+        "",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    ).strip()
 
 
 # ─── Standalone demo: cycle through character states ─────────────────────

@@ -79,6 +79,7 @@ def chat(cwd, model, permission_mode, append_system_prompt) -> None:
         cwd=cwd,
         model=model,
         permission_mode=permission_mode,
+        tools="",  # Main agent is text-only; all work delegated via SPAWN
     )
     if append_system_prompt:
         kwargs["append_system_prompt"] = append_system_prompt

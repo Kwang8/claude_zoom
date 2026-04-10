@@ -22,8 +22,10 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
+import time
 from functools import lru_cache
-from typing import Any
+from typing import Any, Callable
 
 # Module-level lazy cache for the parakeet model. Loading takes a few
 # seconds (model weights + mlx graph), so we only want to pay that once
@@ -154,33 +156,21 @@ def warm_up() -> None:
     _load_parakeet()
 
 
-def listen_once(seconds: float = 6.0) -> str | None:
-    """Record `seconds` of audio from the default mic, transcribe with parakeet.
+def _transcribe_audio(audio: Any) -> str | None:
+    """Transcribe a numpy float32 audio array with parakeet.
 
-    Returns the transcript text, or None if silence / empty transcription.
+    Returns the transcript text, or None for silence / empty transcription.
+    Shared helper used by ``listen_once``, ``Recorder.stop_and_transcribe``,
+    and the streaming partial-transcription thread.
     """
-    try:
-        import numpy as np  # type: ignore[import-not-found]
-        import sounddevice as sd  # type: ignore[import-not-found]
-        import soundfile as sf  # type: ignore[import-not-found]
-    except ImportError as e:
-        raise RuntimeError(
-            "voice deps not installed. Run: pip install -e '.[voice]'"
-        ) from e
+    import numpy as np  # type: ignore[import-not-found]
+    import soundfile as sf  # type: ignore[import-not-found]
 
-    frames = int(seconds * SAMPLE_RATE)
-    recording = sd.rec(frames, samplerate=SAMPLE_RATE, channels=1, dtype="float32")
-    sd.wait()
-    audio = recording.flatten()
-
-    # Treat as silence if the whole buffer is very quiet. RMS threshold is
-    # coarse but catches "user didn't say anything".
     rms = float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
     if rms < 0.005:
         return None
 
     model = _load_parakeet()
-
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_path = tmp.name
     try:
@@ -196,6 +186,27 @@ def listen_once(seconds: float = 6.0) -> str | None:
     return text or None
 
 
+def listen_once(seconds: float = 6.0) -> str | None:
+    """Record `seconds` of audio from the default mic, transcribe with parakeet.
+
+    Returns the transcript text, or None if silence / empty transcription.
+    """
+    try:
+        import numpy as np  # type: ignore[import-not-found]
+        import sounddevice as sd  # type: ignore[import-not-found]
+    except ImportError as e:
+        raise RuntimeError(
+            "voice deps not installed. Run: pip install -e '.[voice]'"
+        ) from e
+
+    frames = int(seconds * SAMPLE_RATE)
+    recording = sd.rec(frames, samplerate=SAMPLE_RATE, channels=1, dtype="float32")
+    sd.wait()
+    audio = recording.flatten()
+
+    return _transcribe_audio(audio)
+
+
 class Recorder:
     """Manually-controlled mic recorder for push-to-talk UX.
 
@@ -203,13 +214,38 @@ class Recorder:
     stream, then `stop_and_transcribe()` on another thread to close the stream
     and run parakeet over what was captured. Unlike `listen_once`, this does
     not impose a fixed duration — the user controls it via a toggle key.
+
+    **Streaming transcription**: call ``start(on_partial_transcript=cb)`` to
+    receive partial transcripts while recording.  A background thread will
+    periodically snapshot the audio captured so far, run parakeet on it, and
+    invoke ``cb(text)`` with the (possibly incomplete) transcript.  The final
+    authoritative transcript is still returned by ``stop_and_transcribe()``.
     """
+
+    # How often (seconds) the streaming thread snapshots + transcribes.
+    PARTIAL_INTERVAL: float = 2.0
 
     def __init__(self) -> None:
         self._frames: list = []
         self._stream: Any = None
+        self._lock = threading.Lock()
+        self._partial_thread: threading.Thread | None = None
+        self._partial_stop = threading.Event()
 
-    def start(self) -> None:
+    def start(
+        self,
+        on_partial_transcript: Callable[[str], None] | None = None,
+    ) -> None:
+        """Open the mic and start buffering.
+
+        Parameters
+        ----------
+        on_partial_transcript:
+            If provided, a background thread will periodically transcribe the
+            audio captured *so far* and call this function with the partial
+            text.  The callback is invoked from the background thread — callers
+            should schedule UI updates accordingly.
+        """
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
         except ImportError as e:
@@ -218,10 +254,12 @@ class Recorder:
             ) from e
 
         self._frames = []
+        self._partial_stop.clear()
 
         def _callback(indata, _frames, _time_info, _status) -> None:
             # Copy so we don't keep a reference to the PortAudio buffer.
-            self._frames.append(indata.copy())
+            with self._lock:
+                self._frames.append(indata.copy())
 
         self._stream = sd.InputStream(
             samplerate=SAMPLE_RATE,
@@ -231,15 +269,53 @@ class Recorder:
         )
         self._stream.start()
 
+        # Kick off the partial-transcription background thread if requested.
+        if on_partial_transcript is not None:
+            self._partial_thread = threading.Thread(
+                target=self._partial_loop,
+                args=(on_partial_transcript,),
+                daemon=True,
+                name="partial-transcriber",
+            )
+            self._partial_thread.start()
+
+    def _partial_loop(
+        self,
+        callback: Callable[[str], None],
+    ) -> None:
+        """Background loop: snapshot frames, transcribe, invoke callback."""
+        import numpy as np  # type: ignore[import-not-found]
+
+        while not self._partial_stop.wait(timeout=self.PARTIAL_INTERVAL):
+            # Take a snapshot of current frames under the lock.
+            with self._lock:
+                if not self._frames:
+                    continue
+                snapshot = list(self._frames)
+
+            audio = np.concatenate(snapshot).flatten()
+            try:
+                text = _transcribe_audio(audio)
+            except Exception:  # noqa: BLE001
+                continue
+
+            if text:
+                callback(text)
+
     def stop_and_transcribe(self) -> str | None:
         """Close the stream and return a transcript, or None for silence."""
         try:
             import numpy as np  # type: ignore[import-not-found]
-            import soundfile as sf  # type: ignore[import-not-found]
         except ImportError as e:
             raise RuntimeError(
                 "voice deps not installed. Run: pip install -e '.[voice]'"
             ) from e
+
+        # Signal the partial thread to stop, then wait for it to finish.
+        self._partial_stop.set()
+        if self._partial_thread is not None:
+            self._partial_thread.join(timeout=5.0)
+            self._partial_thread = None
 
         stream = self._stream
         if stream is None:
@@ -250,32 +326,20 @@ class Recorder:
         finally:
             self._stream = None
 
-        if not self._frames:
-            return None
-        audio = np.concatenate(self._frames).flatten()
-        self._frames = []
+        with self._lock:
+            if not self._frames:
+                return None
+            audio = np.concatenate(self._frames).flatten()
+            self._frames = []
 
-        rms = float(np.sqrt(np.mean(audio**2))) if audio.size else 0.0
-        if rms < 0.005:
-            return None
-
-        model = _load_parakeet()
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp_path = tmp.name
-        try:
-            sf.write(tmp_path, audio, SAMPLE_RATE, subtype="PCM_16")
-            result = model.transcribe(tmp_path)
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-
-        text = (getattr(result, "text", "") or "").strip()
-        return text or None
+        return _transcribe_audio(audio)
 
     def close(self) -> None:
         """Best-effort cleanup of the stream without running transcription."""
+        self._partial_stop.set()
+        if self._partial_thread is not None:
+            self._partial_thread.join(timeout=2.0)
+            self._partial_thread = None
         stream = self._stream
         if stream is None:
             return
@@ -286,4 +350,5 @@ class Recorder:
             pass
         finally:
             self._stream = None
-            self._frames = []
+            with self._lock:
+                self._frames = []
