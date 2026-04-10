@@ -34,12 +34,19 @@ Grant your terminal microphone permission in System Settings > Privacy & Securit
 ```bash
 # Terminal 1: Start the Python backend
 source .venv/bin/activate
-claude-zoom serve
+claude-zoom serve --cwd ~/some/repo
 
 # Terminal 2: Launch the Electron app
 cd electron
 npm install   # first time only
-npm run dev
+CLAUDE_ZOOM_CWD=~/some/repo npm run dev
+```
+
+You can also launch Electron directly with a target repo:
+
+```bash
+cd electron
+electron . --cwd ~/some/repo
 ```
 
 The desktop app connects to the Python WebSocket server and gives you:
@@ -93,6 +100,7 @@ claude-zoom chat --log-file debug.log             # write debug logs to file
 
 ```bash
 claude-zoom serve --port 8765 --host localhost
+claude-zoom serve --cwd ~/some/repo
 claude-zoom serve --fresh          # start new session
 claude-zoom serve --log-file s.log # debug logging
 ```
