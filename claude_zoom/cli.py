@@ -60,7 +60,13 @@ def main() -> None:
     type=click.Path(),
     help="Write debug logs to this file (e.g. claude_zoom.log).",
 )
-def chat(cwd, model, permission_mode, append_system_prompt, log_file) -> None:
+@click.option(
+    "--fresh",
+    is_flag=True,
+    default=False,
+    help="Start a fresh session instead of resuming the previous one.",
+)
+def chat(cwd, model, permission_mode, append_system_prompt, log_file, fresh) -> None:
     """Voice-chat with a live Claude Code instance.
 
     Listens on your mic, sends your spoken request to a live `claude -p`
@@ -97,8 +103,12 @@ def chat(cwd, model, permission_mode, append_system_prompt, log_file) -> None:
     )
     if append_system_prompt:
         kwargs["append_system_prompt"] = append_system_prompt
+    if fresh:
+        from .state import clear_state
+        clear_state(cwd or ".")
+
     session = ClaudeSession(**kwargs)
-    ChatApp(session).run()
+    ChatApp(session, resume=not fresh).run()
 
 
 def _fetch_change(ref: str) -> ChangeContext:

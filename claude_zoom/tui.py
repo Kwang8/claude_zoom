@@ -821,9 +821,10 @@ class ChatApp(App):
         Binding("i", "clear_images", "clear images"),
     ]
 
-    def __init__(self, session: "ClaudeSession") -> None:
+    def __init__(self, session: "ClaudeSession", *, resume: bool = True) -> None:
         super().__init__()
         self.session = session
+        self._resume = resume
         self._stop_flag = threading.Event()
         self._mic_event = threading.Event()
         # Set by escape during the recording phase so the worker can abort
@@ -888,6 +889,7 @@ class ChatApp(App):
         self.query_one(StatusBar).action = "cancel sent"
 
     async def action_quit(self) -> None:  # type: ignore[override]
+        self._save_state()
         self._stop_flag.set()
         self._mic_event.set()
         self.session.cancel()
@@ -935,10 +937,16 @@ class ChatApp(App):
         from .narrator import summarize_turn
         from .voice import Recorder, play_sound
 
-        intro = (
-            "Hey! Press space to talk. "
-            "You can spin off sub-agents and talk to them by name or number."
-        )
+        # Try to resume a previous session.
+        intro: str | None = None
+        if self._resume:
+            intro = self._restore_state()
+
+        if not intro:
+            intro = (
+                "Hey! Press space to talk. "
+                "You can spin off sub-agents and talk to them by name or number."
+            )
         self._append_message("claude", intro)
         self._set_progress("ready")
         self._speak_main(intro)
@@ -1347,6 +1355,95 @@ class ChatApp(App):
                 return True
             time.sleep(0.05)
         return False
+
+    # ─── State persistence ─────────────────────────────────────────────────
+
+    def _save_state(self) -> None:
+        """Snapshot current session + agent state to disk."""
+        from .state import AgentState, AppState, save_state
+
+        cwd = self.session.cwd or "."
+        agent_states = []
+        for a in self._agent_manager.all_agents:
+            agent_states.append(AgentState(
+                id=a.id,
+                name=a.name,
+                session_id=a.session.session_id,
+                worktree_path=a.worktree_path,
+                base_cwd=a.base_cwd,
+                task=a.task,
+                status=a.status if a.status != "working" else "done",
+                number=a.number,
+                branch=a.branch,
+            ))
+        state = AppState(
+            main_session_id=self.session.session_id,
+            main_model=self.session.model,
+            main_cwd=cwd,
+            agents=agent_states,
+            agent_counter=self._agent_manager._counter,
+        )
+        save_state(state, cwd)
+        log.info("session saved (%d agents)", len(agent_states))
+
+    def _restore_state(self) -> str | None:
+        """Restore previous session from disk. Returns intro message or None."""
+        from .agents import AgentInstance
+        from .chat import ClaudeSession
+        from .state import load_state
+
+        cwd = self.session.cwd or "."
+        state = load_state(cwd)
+        if state is None or state.main_session_id is None:
+            return None
+
+        # Restore main session.
+        self.session.session_id = state.main_session_id
+        log.info("restored main session %s", state.main_session_id)
+
+        # Restore sub-agent metadata (sessions are lazy — they resume on
+        # next send() via --resume).
+        self._agent_manager._counter = state.agent_counter
+        for a in state.agents:
+            session = ClaudeSession(
+                cwd=a.worktree_path or a.base_cwd,
+                model="sonnet",
+                permission_mode=self.session.permission_mode,
+                append_system_prompt=self._agent_manager._sub_system_prompt(),
+            )
+            session.session_id = a.session_id
+            agent = AgentInstance(
+                id=a.id,
+                name=a.name,
+                session=session,
+                worktree_path=a.worktree_path,
+                base_cwd=a.base_cwd,
+                task=a.task,
+                status=a.status,
+                number=a.number,
+                branch=a.branch,
+            )
+            self._agent_manager.agents[a.id] = agent
+
+            # Add panel to sidebar.
+            def _mount(ag: AgentInstance = agent) -> None:
+                panel = MiniAgentPanel(ag.id, ag.name, id=f"agent-{ag.id}")
+                panel.agent_state = ag.status
+                try:
+                    self.query_one(AgentSidebar).mount(panel)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._call(_mount)
+
+        n = len(state.agents)
+        agent_names = ", ".join(a.name for a in state.agents) if state.agents else ""
+        if n:
+            return (
+                f"Welcome back! Resumed previous session with {n} "
+                f"agent{'s' if n != 1 else ''}: {agent_names}. "
+                f"Press space to talk."
+            )
+        return "Welcome back! Resumed previous session. Press space to talk."
 
     # ─── Sub-agent helpers ────────────────────────────────────────────────
 

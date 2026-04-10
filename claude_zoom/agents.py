@@ -625,6 +625,9 @@ class AgentManager:
         with self._lock:
             return list(self.agents.values())
 
+    def _sub_system_prompt(self) -> str:
+        return SUB_AGENT_SYSTEM_PROMPT
+
 
 # ─── Smart message routing ───────────────────────────────────────────────
 
