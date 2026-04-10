@@ -24,6 +24,7 @@ export function App() {
 
       if (e.code === "Space") {
         e.preventDefault();
+        console.log("[app] space pressed, sending mic_start");
         send({ type: "mic_start" });
       } else if (e.code === "Escape") {
         e.preventDefault();

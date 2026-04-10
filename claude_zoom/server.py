@@ -798,7 +798,27 @@ async def _handle_client(
             pass
 
     engine._emit = _on_emit
-    engine.start()
+
+    # Replay current transcript so reconnecting clients see history.
+    for msg in engine._transcript_log:
+        try:
+            await websocket.send(json.dumps(msg))
+        except Exception:  # noqa: BLE001
+            break
+
+    # Replay current agent list.
+    for a in engine._agent_manager.all_agents:
+        try:
+            await websocket.send(json.dumps({
+                "type": "agent_spawned",
+                "agent_id": a.id,
+                "name": a.name,
+                "number": a.number,
+                "task": a.task,
+                "status": a.status,
+            }))
+        except Exception:  # noqa: BLE001
+            break
 
     try:
         async for raw in websocket:
@@ -837,7 +857,8 @@ async def _handle_client(
     except Exception as e:  # noqa: BLE001
         log.warning("client disconnected: %s", e)
     finally:
-        engine.stop()
+        # Don't stop engine on disconnect — it keeps running for reconnects.
+        engine._emit = lambda msg: None
         log.info("client disconnected")
 
 
@@ -857,6 +878,7 @@ async def run_server(
         ) from e
 
     engine = ChatEngine(session, on_emit=lambda msg: None, resume=resume)
+    engine.start()
 
     async def handler(websocket: Any) -> None:
         await _handle_client(websocket, engine)
