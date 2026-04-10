@@ -106,6 +106,7 @@ function reducer(state: State, action: Action): State {
           a.agent_id === msg.agent_id
             ? {
                 ...a,
+                name: msg.name ?? a.name,
                 status: msg.status,
                 ticker: msg.ticker ?? a.ticker,
                 started_at:
