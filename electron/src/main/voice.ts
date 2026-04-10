@@ -1,64 +1,135 @@
-import { ChildProcess, execFileSync, spawn } from "child_process";
+import { ChildProcess, spawn } from "child_process";
 import fs from "fs";
-import os from "os";
 import path from "path";
 
-const DEFAULT_SAY_RATE = "190";
+const DEFAULT_EDGE_VOICE = "en-US-EmmaMultilingualNeural";
+const DEFAULT_SAY_RATE = 190;
 
-const VOICE_PREFERENCES = [
-  /^Siri Voice \d/i,
-  /\(Premium\)/i,
-  /\(Enhanced\)/i,
-  /^Ava\b/i,
-  /^Zoe\b/i,
-  /^Evan\b/i,
-  /^Samantha\b/i,
-  /^Daniel\b/i,
-];
-
-let cachedVoice: string | null | undefined;
-
-function autodetectVoice(): string | null {
-  if (cachedVoice !== undefined) return cachedVoice;
-  try {
-    const out = execFileSync("say", ["-v", "?"], { encoding: "utf-8", timeout: 5000 });
-    const english: string[] = [];
-    for (const line of out.split("\n")) {
-      if (!line.includes(" en_")) continue;
-      const name = line.split(/\s{2,}/)[0].trim();
-      if (name) english.push(name);
-    }
-    for (const pattern of VOICE_PREFERENCES) {
-      for (const name of english) {
-        if (pattern.test(name)) {
-          cachedVoice = name;
-          return name;
-        }
-      }
-    }
-    cachedVoice = english[0] || null;
-    return cachedVoice;
-  } catch {
-    cachedVoice = null;
-    return null;
-  }
+function findProjectRoot(): string {
+  return path.resolve(__dirname, "..", "..");
 }
 
-function resolveVoice(): string | null {
-  return process.env.CLAUDE_ZOOM_SAY_VOICE || autodetectVoice();
+function resolveVoice(): string {
+  const edgeVoice = process.env.CLAUDE_ZOOM_EDGE_TTS_VOICE?.trim();
+  if (edgeVoice) return edgeVoice;
+
+  const legacyVoice = process.env.CLAUDE_ZOOM_SAY_VOICE?.trim();
+  if (legacyVoice?.includes("Neural")) return legacyVoice;
+
+  return DEFAULT_EDGE_VOICE;
 }
 
 function resolveRate(): string {
-  return process.env.CLAUDE_ZOOM_SAY_RATE || DEFAULT_SAY_RATE;
+  const edgeRate = process.env.CLAUDE_ZOOM_EDGE_TTS_RATE?.trim();
+  if (edgeRate) return edgeRate;
+
+  const legacyRate = process.env.CLAUDE_ZOOM_SAY_RATE?.trim();
+  const wordsPerMinute = legacyRate ? Number(legacyRate) : DEFAULT_SAY_RATE;
+  if (!Number.isFinite(wordsPerMinute) || wordsPerMinute <= 0) return "+0%";
+
+  const relativePercent = Math.round(((wordsPerMinute - DEFAULT_SAY_RATE) / DEFAULT_SAY_RATE) * 100);
+  return `${relativePercent >= 0 ? "+" : ""}${relativePercent}%`;
 }
 
-function buildSayCmd(text: string): string[] {
-  const cmd = ["say", "-r", resolveRate()];
-  const voice = resolveVoice();
-  if (voice) cmd.push("-v", voice);
-  cmd.push(text);
-  return cmd;
+const EDGE_TTS_HELPER_SCRIPT = `
+import { spawn } from "node:child_process";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { EdgeTTS } from "edge-tts-universal";
+
+const text = process.argv[1] ?? "";
+const voice = process.env.CLAUDE_ZOOM_EDGE_TTS_VOICE ?? "en-US-EmmaMultilingualNeural";
+const rate = process.env.CLAUDE_ZOOM_EDGE_TTS_RATE ?? "+0%";
+const sayVoice = process.env.CLAUDE_ZOOM_SAY_VOICE ?? "";
+const sayRate = process.env.CLAUDE_ZOOM_SAY_RATE ?? "190";
+
+let tmpFile = "";
+let player = null;
+
+async function cleanup() {
+  if (!tmpFile) return;
+  try {
+    await fs.unlink(tmpFile);
+  } catch {}
+  tmpFile = "";
 }
+
+function killPlayer(signal = "SIGTERM") {
+  if (!player) return;
+  try {
+    player.kill(signal);
+  } catch {}
+}
+
+function playWithSay() {
+  if (process.platform !== "darwin") {
+    throw new Error("No fallback TTS available on this platform");
+  }
+
+  const args = ["-r", sayRate];
+  if (sayVoice.trim()) args.push("-v", sayVoice.trim());
+  args.push(text);
+
+  player = spawn("say", args, { stdio: "ignore" });
+  player.once("exit", async (code) => {
+    await cleanup();
+    process.exit(code ?? 0);
+  });
+  player.once("error", async () => {
+    await cleanup();
+    process.exit(1);
+  });
+}
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, async () => {
+    killPlayer(signal);
+    await cleanup();
+    process.exit(0);
+  });
+}
+
+try {
+  if (!text.trim()) {
+    process.exit(0);
+  }
+
+  try {
+    const tts = new EdgeTTS(text, voice, { rate });
+    const result = await tts.synthesize();
+    const audio = Buffer.from(await result.audio.arrayBuffer());
+
+    tmpFile = path.join(os.tmpdir(), \`claude-zoom-tts-\${process.pid}-\${Date.now()}.mp3\`);
+    await fs.writeFile(tmpFile, audio);
+
+    const playerCmd = process.platform === "darwin" ? "afplay" : null;
+    if (!playerCmd) {
+      throw new Error(\`Unsupported TTS playback platform: \${process.platform}\`);
+    }
+
+    player = spawn(playerCmd, [tmpFile], { stdio: "ignore" });
+    player.once("exit", async (code) => {
+      await cleanup();
+      if ((code ?? 0) === 0) {
+        process.exit(0);
+        return;
+      }
+      playWithSay();
+    });
+    player.once("error", async () => {
+      await cleanup();
+      playWithSay();
+    });
+  } catch {
+    await cleanup();
+    playWithSay();
+  }
+} catch {
+  await cleanup();
+  process.exit(1);
+}
+`;
 
 export function playSound(name: string): void {
   const sounds: Record<string, string> = {
@@ -77,9 +148,15 @@ export function playSound(name: string): void {
 
 export function speakAsync(text: string): ChildProcess | null {
   if (!text.trim()) return null;
-  const cmd = buildSayCmd(text);
-  return spawn(cmd[0], cmd.slice(1), {
+  return spawn(process.execPath, ["--input-type=module", "-e", EDGE_TTS_HELPER_SCRIPT, text], {
+    cwd: findProjectRoot(),
     stdio: ["ignore", "ignore", "ignore"],
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      CLAUDE_ZOOM_EDGE_TTS_VOICE: resolveVoice(),
+      CLAUDE_ZOOM_EDGE_TTS_RATE: resolveRate(),
+    },
   });
 }
 
@@ -150,7 +227,7 @@ for line in sys.stdin:
 
 function findPython(): string | null {
   // Look for the project venv — 3 levels up from dist/main/
-  const projectRoot = path.resolve(__dirname, "..", "..", "..");
+  const projectRoot = findProjectRoot();
   const venvPython = path.join(projectRoot, ".venv", "bin", "python3");
   if (fs.existsSync(venvPython)) return venvPython;
   return null;

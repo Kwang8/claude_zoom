@@ -54,7 +54,7 @@ def _build_prompt_with_images(prompt: str, images: list[str]) -> str:
 
 def _strip_spawn_markers(text: str) -> str:
     return re.sub(
-        r"<SPAWN\s+name=[\"'][^\"']+[\"']\s*>.*?</SPAWN>",
+        r"<SPAWN[^>]*>.*?</SPAWN>",
         "",
         text,
         flags=re.DOTALL | re.IGNORECASE,
@@ -114,10 +114,14 @@ class ChatEngine:
         *,
         on_emit: Callable[[dict[str, Any]], None],
         resume: bool = True,
+        remote_repo: str | None = None,
+        remote_auth: str = "oauth",
     ) -> None:
         self.session = session
         self._emit = on_emit
         self._resume = resume
+        self.remote_repo = remote_repo
+        self.remote_auth = remote_auth
 
         self._speech_queue = SpeechQueue()
         self._agent_manager = AgentManager(self._speech_queue)
@@ -403,12 +407,14 @@ class ChatEngine:
                 continue
 
             # ── VOICE TRIGGER ──
-            trigger_task = parse_voice_trigger(transcript)
-            if trigger_task:
+            trigger = parse_voice_trigger(transcript)
+            if trigger:
+                trigger_task, trigger_remote = trigger
                 name = _extract_agent_name(trigger_task)
                 try:
-                    self._spawn_sub(name, trigger_task)
-                    ack = f"On it! Kicked off agent {name}."
+                    self._spawn_sub(name, trigger_task, remote=trigger_remote)
+                    kind = "remote agent" if trigger_remote else "agent"
+                    ack = f"On it! Kicked off {kind} {name}."
                     self._send_transcript("claude", ack)
                     self._send_state("talking", ack)
                     self._speak(ack)
@@ -482,9 +488,9 @@ class ChatEngine:
                                 self._send_ticker(f"{tname}({short})")
                             elif item.get("type") == "text":
                                 text = item.get("text") or ""
-                                for sname, stask in parse_spawn_markers(text):
+                                for sname, stask, sremote in parse_spawn_markers(text):
                                     try:
-                                        self._spawn_sub(sname, stask)
+                                        self._spawn_sub(sname, stask, remote=sremote)
                                     except Exception:  # noqa: BLE001
                                         pass
                                 cleaned = _strip_spawn_markers(text).strip()
@@ -641,9 +647,18 @@ class ChatEngine:
 
     # ── Sub-agent helpers ────────────────────────────────────────────────
 
-    def _spawn_sub(self, name: str, task: str) -> None:
+    def _spawn_sub(self, name: str, task: str, *, remote: bool = False) -> None:
         base_cwd = self.session.cwd or "."
-        agent = self._agent_manager.spawn(
+        repo = self.remote_repo
+        if remote and not repo:
+            from .agents import infer_github_repo
+            repo = infer_github_repo(base_cwd)
+        if remote and not repo:
+            raise RuntimeError(
+                "Remote sub-agents need a GitHub repo. Pass --repo org/name or set "
+                "remote.origin.url in the current git repo."
+            )
+        spawn_kwargs: dict[str, Any] = dict(
             task=_build_prompt_with_images(task, self._image_context),
             name=name,
             base_cwd=base_cwd,
@@ -652,6 +667,11 @@ class ChatEngine:
             on_event=self._on_sub_event,
             on_done=self._on_sub_done,
         )
+        if remote:
+            spawn_kwargs["remote"] = True
+            spawn_kwargs["repo"] = repo
+            spawn_kwargs["auth"] = self.remote_auth
+        agent = self._agent_manager.spawn(**spawn_kwargs)
         self._send(
             "agent_spawned",
             agent_id=agent.id,
@@ -868,6 +888,8 @@ async def run_server(
     host: str = "localhost",
     port: int = 8765,
     resume: bool = True,
+    remote_repo: str | None = None,
+    remote_auth: str = "oauth",
 ) -> None:
     """Start the WebSocket server."""
     try:
@@ -877,7 +899,13 @@ async def run_server(
             "websockets not installed. Run: pip install websockets"
         ) from e
 
-    engine = ChatEngine(session, on_emit=lambda msg: None, resume=resume)
+    engine = ChatEngine(
+        session,
+        on_emit=lambda msg: None,
+        resume=resume,
+        remote_repo=remote_repo,
+        remote_auth=remote_auth,
+    )
     engine.start()
 
     async def handler(websocket: Any) -> None:

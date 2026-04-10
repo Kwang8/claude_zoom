@@ -10,6 +10,8 @@
     "dev:renderer": "vite"
   },
   "dependencies": {
+    "edge-tts-universal": "^1.4.0",
+    "modal": "^0.7.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

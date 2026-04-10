@@ -19,6 +19,10 @@ voice = [
     "numpy>=1.26.0",
     "soundfile>=0.12.1",
 ]
+# Remote execution via Modal cloud sandboxes.
+remote = [
+    "modal>=0.73.0",
+]
 
 [project.scripts]
 claude-zoom = "claude_zoom.cli:main"

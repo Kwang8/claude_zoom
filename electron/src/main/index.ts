@@ -109,6 +109,17 @@ app.on("before-quit", () => {
   engine?.stop();
 });
 
+// Ensure child processes are stopped when Electron is terminated externally
+// (e.g. Ctrl+C in concurrently during development).
+process.on("SIGINT", () => {
+  engine?.stop();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  engine?.stop();
+  process.exit(0);
+});
+
 app.on("activate", () => {
   if (mainWindow === null) {
     createWindow();

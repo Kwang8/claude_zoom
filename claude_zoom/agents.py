@@ -29,12 +29,21 @@ from typing import Any, Literal
 
 from .chat import ClaudeSession
 
+# RemoteClaudeSession is imported lazily to avoid hard dep on modal.
+RemoteClaudeSession: type | None
+try:
+    from .remote import RemoteClaudeSession as _RCS
+    RemoteClaudeSession = _RCS
+except ImportError:
+    RemoteClaudeSession = None
+
 # ─── Voice trigger detection ──────────────────────────────────────────────
 
 _VOICE_TRIGGERS: list[re.Pattern[str]] = [
     re.compile(
-        r"(?:spin\s+off|spawn|launch|start|kick\s+off)\s+"
-        r"(?:a\s+)?(?:new\s+)?(?:sub[- ]?)?agent\s+(?:to\s+)?(.+)",
+        r"(?:spin\s+(?:off|up)|spawn|launch|start|kick\s+off|fire\s+up)\s+"
+        r"(?:a\s+)?(?:new\s+)?(?P<remote>remote\s+)?(?:sub[- ]?)?agent\s+"
+        r"(?:to\s+)?(?P<task>.+)",
         re.IGNORECASE,
     ),
     re.compile(r"in\s+the\s+background[,:]?\s+(.+)", re.IGNORECASE),
@@ -44,6 +53,11 @@ _VOICE_TRIGGERS: list[re.Pattern[str]] = [
     ),
 ]
 
+_REMOTE_TASK_PREFIX_RE = re.compile(
+    r"^(?:(?:a|an)\s+)?remote\s+(?:sub[- ]?)?agent\s+(?:to\s+)?",
+    re.IGNORECASE,
+)
+
 _FILLER_RE = re.compile(
     r"^(?:(?:yeah|yes|yep|ok|okay|sure|hey|please|so|um|uh|well|"
     r"let's|let\s+us|can\s+you|go\s+ahead\s+and|I\s+want\s+to|"
@@ -52,14 +66,20 @@ _FILLER_RE = re.compile(
 )
 
 
-def parse_voice_trigger(transcript: str) -> str | None:
-    """If *transcript* matches a voice-trigger phrase, return the task."""
+def parse_voice_trigger(transcript: str) -> tuple[str, bool] | None:
+    """If *transcript* matches a voice-trigger phrase, return ``(task, remote)``."""
     text = _FILLER_RE.sub("", transcript.strip()).strip()
     for pattern in _VOICE_TRIGGERS:
         m = pattern.search(text)
         if m:
-            task = m.group(1).strip()
-            return task if task else None
+            if "task" in m.groupdict():
+                task = (m.group("task") or "").strip()
+                remote = bool(m.group("remote"))
+            else:
+                task = (m.group(1) or "").strip()
+                remote = False
+            task, remote = _normalize_spawn_request(task, remote_hint=remote)
+            return (task, remote) if task else None
     return None
 
 
@@ -88,15 +108,36 @@ def parse_agent_target(transcript: str) -> tuple[str, str] | None:
 
 # ─── Main-agent SPAWN marker parsing ──────────────────────────────────────
 
-_SPAWN_RE = re.compile(
-    r"<SPAWN\s+name=[\"']([^\"']+)[\"']\s*>(.*?)</SPAWN>",
-    re.DOTALL | re.IGNORECASE,
-)
+_SPAWN_RE = re.compile(r"<SPAWN(?P<attrs>[^>]*)>(?P<body>.*?)</SPAWN>", re.DOTALL | re.IGNORECASE)
+_SPAWN_NAME_RE = re.compile(r'\bname=[\"\']([^\"\']+)[\"\']', re.IGNORECASE)
+_SPAWN_REMOTE_RE = re.compile(r'\bremote=[\"\']?(?:true|1|yes|remote)[\"\']?', re.IGNORECASE)
 
 
-def parse_spawn_markers(text: str) -> list[tuple[str, str]]:
-    """Extract ``(name, task)`` pairs from ``<SPAWN>`` blocks in *text*."""
-    return [(m.group(1).strip(), m.group(2).strip()) for m in _SPAWN_RE.finditer(text)]
+def parse_spawn_markers(text: str) -> list[tuple[str, str, bool]]:
+    """Extract ``(name, task, remote)`` triples from ``<SPAWN>`` blocks in *text*."""
+    out: list[tuple[str, str, bool]] = []
+    for match in _SPAWN_RE.finditer(text):
+        attrs = match.group("attrs") or ""
+        body = (match.group("body") or "").strip()
+        name_match = _SPAWN_NAME_RE.search(attrs)
+        if not name_match:
+            continue
+        remote = bool(_SPAWN_REMOTE_RE.search(attrs))
+        body, remote = _normalize_spawn_request(body, remote_hint=remote)
+        if body:
+            out.append((name_match.group(1).strip(), body, remote))
+    return out
+
+
+def _normalize_spawn_request(task: str, *, remote_hint: bool = False) -> tuple[str, bool]:
+    """Strip a leading ``remote agent`` prefix and return ``(task, remote)``."""
+    text = task.strip()
+    remote = remote_hint
+    prefix = _REMOTE_TASK_PREFIX_RE.match(text)
+    if prefix:
+        remote = True
+        text = text[prefix.end():].strip()
+    return text, remote
 
 
 # ─── Git worktree helpers ─────────────────────────────────────────────────
@@ -139,6 +180,26 @@ def is_git_repo(path: str) -> bool:
         check=False,
     )
     return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def infer_github_repo(path: str) -> str | None:
+    """Best-effort ``owner/repo`` extraction from ``remote.origin.url``."""
+    result = subprocess.run(
+        ["git", "config", "--get", "remote.origin.url"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    url = result.stdout.strip()
+    if not url:
+        return None
+    match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+)(?:\.git)?$", url)
+    if not match:
+        return None
+    return f"{match.group('owner')}/{match.group('repo')}"
 
 
 # ─── Auto-PR helpers ─────────────────────────────────────────────────────
@@ -315,10 +376,11 @@ def _extract_question(events: list[dict]) -> str | None:
 class AgentInstance:
     id: str
     name: str
-    session: ClaudeSession
+    session: ClaudeSession  # or RemoteClaudeSession (same duck-typed interface)
     worktree_path: str | None
     base_cwd: str
     task: str
+    remote: bool = False
     status: AgentStatus = "working"
     events: list[dict[str, Any]] = field(default_factory=list)
     thread: threading.Thread | None = field(default=None, repr=False)
@@ -326,6 +388,12 @@ class AgentInstance:
     branch: str | None = None  # set after commit_and_push
     number: int = 0  # 1-indexed display number
     pending_question: str | None = None  # set when status == "needs_input"
+
+
+def _agent_label(agent: AgentInstance) -> str:
+    """Human-readable label for transcript + spoken updates."""
+    prefix = "[remote agent]" if agent.remote else "agent"
+    return f"{prefix} {agent.name}"
 
 
 class AgentManager:
@@ -346,6 +414,9 @@ class AgentManager:
         model: str = "sonnet",
         permission_mode: str = "acceptEdits",
         *,
+        remote: bool = False,
+        repo: str | None = None,
+        auth: str = "oauth",
         on_event: Any | None = None,
         on_done: Any | None = None,
     ) -> AgentInstance:
@@ -359,19 +430,33 @@ class AgentManager:
 
         worktree_path: str | None = None
         cwd = base_cwd
-        if is_git_repo(base_cwd):
-            try:
-                worktree_path = setup_worktree(base_cwd, agent_id)
-                cwd = worktree_path
-            except RuntimeError:
-                pass
 
-        session = ClaudeSession(
-            cwd=cwd,
-            model=model,
-            permission_mode=permission_mode,
-            append_system_prompt=SUB_AGENT_SYSTEM_PROMPT,
-        )
+        if remote:
+            if RemoteClaudeSession is None:
+                raise RuntimeError(
+                    "Remote deps not installed. Run: pip install -e '.[remote]'"
+                )
+            session = RemoteClaudeSession(
+                cwd=cwd,
+                model=model,
+                permission_mode=permission_mode,
+                append_system_prompt=SUB_AGENT_SYSTEM_PROMPT,
+                repo=repo,
+                auth=auth,
+            )
+        else:
+            if is_git_repo(base_cwd):
+                try:
+                    worktree_path = setup_worktree(base_cwd, agent_id)
+                    cwd = worktree_path
+                except RuntimeError:
+                    pass
+            session = ClaudeSession(
+                cwd=cwd,
+                model=model,
+                permission_mode=permission_mode,
+                append_system_prompt=SUB_AGENT_SYSTEM_PROMPT,
+            )
 
         agent = AgentInstance(
             id=agent_id,
@@ -380,6 +465,7 @@ class AgentManager:
             worktree_path=worktree_path,
             base_cwd=base_cwd,
             task=task,
+            remote=remote,
             number=self._counter,
         )
 
@@ -418,16 +504,16 @@ class AgentManager:
                 agent.pending_question = question
                 agent.status = "needs_input"
                 self.speech_queue.put(
-                    f"agent {agent.name}",
+                    _agent_label(agent),
                     f"I have a question: {question}",
                     requires_response=True,
                     agent_id=agent.id,
                     question_type="agent_question",
                 )
             else:
-                # Check for file changes → auto-PR flow.
+                # Check for file changes → auto-PR flow (local agents only).
                 branch = None
-                if agent.worktree_path and _has_changes(agent.worktree_path):
+                if not agent.remote and agent.worktree_path and _has_changes(agent.worktree_path):
                     branch = commit_and_push(agent)
                     agent.branch = branch
 
@@ -440,10 +526,9 @@ class AgentManager:
                     summary = "Done."
 
                 if branch:
-                    # PR flow: speak summary + ask about PR.
                     agent.status = "pr_pending"
                     self.speech_queue.put(
-                        f"agent {agent.name}",
+                        _agent_label(agent),
                         f"{summary} I made changes and pushed branch {branch}. "
                         f"Want me to open a PR?",
                         requires_response=True,
@@ -452,19 +537,25 @@ class AgentManager:
                     )
                 else:
                     agent.status = "done"
-                    self.speech_queue.put(f"agent {agent.name}", summary, agent_id=agent.id)
+                    self.speech_queue.put(_agent_label(agent), summary, agent_id=agent.id)
 
         except Exception as e:  # noqa: BLE001
             agent.status = "error"
-            self.speech_queue.put(f"agent {agent.name}", f"Error: {e}", agent_id=agent.id)
+            self.speech_queue.put(_agent_label(agent), f"Error: {e}", agent_id=agent.id)
         finally:
             if on_done is not None:
                 try:
                     on_done(agent.id)
                 except Exception:  # noqa: BLE001
                     pass
-            # Keep worktree alive if we're waiting for user input or a PR decision.
-            if agent.status not in ("pr_pending", "needs_input") and agent.worktree_path is not None:
+            if agent.remote:
+                # Shut down the remote sandbox.
+                if hasattr(agent.session, "close"):
+                    try:
+                        agent.session.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            elif agent.status not in ("pr_pending", "needs_input") and agent.worktree_path is not None:
                 cleanup_worktree(agent.base_cwd, agent.worktree_path)
 
         # Process queued follow-up tasks.
@@ -493,10 +584,10 @@ class AgentManager:
                     summary = f"Agent {agent.name} hit a summarize error: {e}"
                 if not summary:
                     summary = "Done."
-                self.speech_queue.put(f"agent {agent.name}", summary, agent_id=agent.id)
+                self.speech_queue.put(_agent_label(agent), summary, agent_id=agent.id)
             except Exception as e:  # noqa: BLE001
                 agent.status = "error"
-                self.speech_queue.put(f"agent {agent.name}", f"Error: {e}", agent_id=agent.id)
+                self.speech_queue.put(_agent_label(agent), f"Error: {e}", agent_id=agent.id)
             finally:
                 if on_done is not None:
                     try:

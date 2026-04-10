@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import signal
 import subprocess
+import tempfile
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Iterator
@@ -26,6 +27,9 @@ prose. When you finish a task, state the outcome in one crisp sentence.
 IMPORTANT — sub-agent spawning: You can spawn sub-agents that run in parallel \
 in isolated git worktrees. To spawn one, emit this block in your response:
 <SPAWN name="short-name">detailed task description for the sub-agent</SPAWN>
+
+To request a remote/cloud sub-agent instead, add `remote="true"`:
+<SPAWN name="short-name" remote="true">detailed task description</SPAWN>
 
 You SHOULD aggressively spawn sub-agents. Whenever the user asks you to do \
 something that involves reading code, making changes, researching, running \
@@ -66,24 +70,43 @@ class ClaudeSession:
         Raises RuntimeError if the subprocess exits non-zero or never emits
         an init event.
         """
-        cmd: list[str] = [
-            "claude",
-            "-p",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--model",
-            self.model,
-            "--permission-mode",
-            self.permission_mode,
-            "--append-system-prompt",
-            self.append_system_prompt,
-        ]
-        if self.tools is not None:
-            cmd.extend(["--tools", self.tools])
-        if self.session_id is not None:
-            cmd.extend(["--resume", self.session_id])
+        # Write the append-system-prompt to a temp file so it doesn't count
+        # against Claude Code's internal CLI argument size limit (64 KB).
+        prompt_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", prefix="cz-sysprompt-", delete=False,
+        )
+        try:
+            prompt_file.write(self.append_system_prompt)
+            prompt_file.close()
 
+            cmd: list[str] = [
+                "claude",
+                "-p",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--model",
+                self.model,
+                "--permission-mode",
+                self.permission_mode,
+                "--append-system-prompt-file",
+                prompt_file.name,
+            ]
+            if self.tools is not None:
+                cmd.extend(["--tools", self.tools])
+            if self.session_id is not None:
+                cmd.extend(["--resume", self.session_id])
+
+            yield from self._run_claude(cmd, prompt)
+        finally:
+            try:
+                import os
+                os.unlink(prompt_file.name)
+            except OSError:
+                pass
+
+    def _run_claude(self, cmd: list[str], prompt: str) -> Iterator[dict[str, Any]]:
+        """Spawn ``claude -p``, pipe *prompt* to stdin, yield JSONL events."""
         self._proc = subprocess.Popen(
             cmd,
             cwd=self.cwd,
@@ -94,8 +117,6 @@ class ClaudeSession:
             bufsize=1,  # line-buffered so events stream as they arrive
         )
 
-        # Pipe the prompt in and close stdin so Claude knows the request is
-        # complete. We do this BEFORE reading stdout to avoid any deadlocks.
         assert self._proc.stdin is not None
         try:
             self._proc.stdin.write(prompt)
@@ -113,13 +134,8 @@ class ClaudeSession:
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
-                    # Non-JSON lines from claude are almost certainly log
-                    # noise; skip them.
                     continue
 
-                # Grab the session id from the first init we see on the very
-                # first turn. On resumed turns this still shows the ORIGINAL
-                # session id (confirmed behavior), so we only set it once.
                 if (
                     self.session_id is None
                     and event.get("type") == "system"
@@ -162,20 +178,26 @@ class ClaudeSession:
 # ─── Event → log line formatting ───────────────────────────────────────────
 
 
-def events_to_log_lines(events: list[dict[str, Any]]) -> list[str]:
+def events_to_log_lines(
+    events: list[dict[str, Any]], *, include_thinking: bool = False
+) -> list[str]:
     """Turn a raw event stream into rich-markup strings for the TUI log."""
     lines: list[str] = []
     for event in events:
-        lines.extend(_event_to_lines(event))
+        lines.extend(_event_to_lines(event, include_thinking=include_thinking))
     return lines
 
 
-def event_to_log_lines(event: dict[str, Any]) -> list[str]:
+def event_to_log_lines(
+    event: dict[str, Any], *, include_thinking: bool = False
+) -> list[str]:
     """Single-event convenience wrapper (for streaming into the TUI live)."""
-    return _event_to_lines(event)
+    return _event_to_lines(event, include_thinking=include_thinking)
 
 
-def _event_to_lines(event: dict[str, Any]) -> list[str]:
+def _event_to_lines(
+    event: dict[str, Any], *, include_thinking: bool = False
+) -> list[str]:
     etype = event.get("type")
     if etype == "system":
         if event.get("subtype") == "init":
@@ -199,8 +221,14 @@ def _event_to_lines(event: dict[str, Any]) -> list[str]:
                 short = summarize_tool_args(name, item.get("input") or {})
                 out.append(f"[cyan]→ {name}({short})[/cyan]")
             elif t == "thinking":
-                # Noisy; skip by default.
-                pass
+                if include_thinking:
+                    thinking = (
+                        item.get("thinking")
+                        or item.get("text")
+                        or ""
+                    ).strip()
+                    if thinking:
+                        out.append(f"[dim]… {_escape(_shorten(thinking, 200))}[/dim]")
         return out
 
     if etype == "user":

@@ -47,7 +47,25 @@ def main() -> None:
 @click.option("--host", default="localhost", show_default=True)
 @click.option("--fresh", is_flag=True, default=False)
 @click.option("--log-file", default=None, type=click.Path())
-def serve(cwd, model, permission_mode, port, host, fresh, log_file) -> None:
+@click.option(
+    "--repo",
+    default=None,
+    help="Default GitHub repo (org/name) for remote sub-agents to clone.",
+)
+@click.option(
+    "--auth",
+    type=click.Choice(["oauth", "api-key"]),
+    default="oauth",
+    show_default=True,
+    help=(
+        "Default auth mode for remote sub-agents. "
+        "'oauth' uses CLAUDE_CODE_OAUTH_TOKEN from the Modal Secret "
+        "'claude-auth-token'. "
+        "'api-key' uses ANTHROPIC_API_KEY from the Modal Secret "
+        "'anthropic-api-key'."
+    ),
+)
+def serve(cwd, model, permission_mode, port, host, fresh, log_file, repo, auth) -> None:
     """Start the WebSocket server for the Electron frontend."""
     import asyncio
 
@@ -71,7 +89,53 @@ def serve(cwd, model, permission_mode, port, host, fresh, log_file) -> None:
         permission_mode=permission_mode,
         tools="",
     )
-    asyncio.run(run_server(session, host=host, port=port, resume=not fresh))
+    asyncio.run(run_server(
+        session, host=host, port=port, resume=not fresh,
+        remote_repo=repo, remote_auth=auth,
+    ))
+
+
+@main.group()
+def snapshot() -> None:
+    """Manage Modal volume repo snapshots for fast sandbox startup."""
+
+
+@snapshot.command("refresh")
+@click.argument("repo")
+def snapshot_refresh(repo: str) -> None:
+    """Clone or pull REPO (org/name) into the Modal volume snapshot.
+
+    This pre-populates the volume so future --remote sandboxes start instantly
+    instead of cloning from scratch.
+    """
+    try:
+        from .snapshots import refresh_snapshot_local
+    except ImportError as e:
+        raise click.ClickException(
+            f"Remote deps not installed. Run: pip install -e '.[remote]'\n  ({e})"
+        ) from e
+
+    click.echo(f"Refreshing snapshot for {repo}...")
+    refresh_snapshot_local(repo)
+    click.echo("  Done.")
+
+
+@snapshot.command("list")
+def snapshot_list() -> None:
+    """List repos currently snapshotted in the Modal volume."""
+    try:
+        from .snapshots import list_snapshots
+    except ImportError as e:
+        raise click.ClickException(
+            f"Remote deps not installed. Run: pip install -e '.[remote]'\n  ({e})"
+        ) from e
+
+    repos = list_snapshots()
+    if not repos:
+        click.echo("No snapshots found.")
+        return
+    for r in repos:
+        click.echo(f"  {r}")
 
 
 def _fetch_change(ref: str) -> ChangeContext:
