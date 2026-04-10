@@ -100,6 +100,26 @@ def _resolve_rate() -> str:
     return os.environ.get("CLAUDE_ZOOM_SAY_RATE") or DEFAULT_SAY_RATE
 
 
+def play_sound(name: str) -> None:
+    """Play a short notification sound via macOS ``afplay`` (non-blocking).
+
+    Built-in system sounds live in /System/Library/Sounds/.
+    Mapping: "ready" → Tink, "done" → Glass, "error" → Basso.
+    """
+    sounds = {
+        "ready": "/System/Library/Sounds/Tink.aiff",
+        "done": "/System/Library/Sounds/Glass.aiff",
+        "error": "/System/Library/Sounds/Basso.aiff",
+    }
+    path = sounds.get(name)
+    if path and os.path.exists(path):
+        subprocess.Popen(
+            ["afplay", path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+
 def _build_say_cmd(text: str) -> list[str]:
     cmd = ["say", "-r", _resolve_rate()]
     voice = _resolve_voice()

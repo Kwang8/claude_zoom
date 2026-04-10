@@ -24,7 +24,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.reactive import reactive
-from textual.widgets import Header, Label, Static, TextArea
+from textual.widgets import Header, Input, Label, Static, TextArea
 
 if TYPE_CHECKING:
     from .chat import ClaudeSession
@@ -673,6 +673,7 @@ class MiniAgentPanel(Static):
         "working": "[cyan]*[/cyan]",
         "done": "[green]✓[/green]",
         "error": "[red]✗[/red]",
+        "pr_pending": "[yellow]PR?[/yellow]",
     }
 
     def __init__(self, agent_id: str, name: str, **kwargs: Any) -> None:
@@ -726,35 +727,43 @@ class AgentSidebar(VerticalScroll):
         yield Static("[dim]── sub agents ──[/dim]", id="sub-agents-header")
 
 
-_STOP_WORDS: set[str] = {
-    "the", "a", "an", "this", "that", "and", "or", "for", "in", "on", "to",
-    "with", "of", "is", "are", "was", "were", "be", "been", "do", "does",
-    "did", "will", "would", "could", "should", "can", "may", "might",
-    "shall", "has", "have", "had", "it", "its", "my", "your", "our",
-    "their", "all", "some", "any", "each", "every", "very", "just", "also",
-    "so", "if", "but", "not", "no", "at", "by", "from", "up", "out",
-    "about", "into", "over", "after", "before", "between", "under",
-    "through", "during", "without", "within", "along", "following",
-    "across", "behind", "beyond", "plus", "except", "since", "toward",
-    "towards", "upon", "whether", "while", "although", "though", "because",
-    "unless", "until", "that", "which", "who", "whom", "whose", "where",
-    "when", "how", "what", "why", "let", "me", "us", "them", "him", "her",
-    "please", "go", "look", "make", "take", "get", "give", "come", "know",
-    "think", "see", "want", "use",
+# Themed codenames per task category — chosen based on the task's primary intent.
+# Greek/Roman mythology and space exploration for a cohesive feel.
+_CATEGORY_NAMES: dict[str, list[str]] = {
+    "search":  ["hermes",     "argus",   "scout",   "lynx",    "seeker",  "tracer"],
+    "code":    ["hephaestus", "daedalus","forge",   "vulcan",  "chisel",  "builder"],
+    "analyze": ["athena",     "oracle",  "minerva", "lens",    "seer",    "prism"],
+    "write":   ["calliope",   "muse",    "scribe",  "herald",  "quill",   "lyra"],
+    "data":    ["atlas",      "nexus",   "pythia",  "codex",   "cipher",  "ledger"],
+    "test":    ["sentinel",   "vigil",   "probe",   "veritas", "scanner", "argus"],
+    "deploy":  ["ares",       "vanguard","lance",   "pilot",   "corsair", "herald"],
+    "fix":     ["chiron",     "remedy",  "aether",  "solace",  "mend",    "patch"],
 }
+_DEFAULT_NAMES: list[str] = [
+    "prometheus", "titan", "helios", "eos", "zephyr",
+    "iris", "castor", "pollux", "selene", "phoebe",
+]
+
+_KEYWORD_CATEGORIES: list[tuple[list[str], str]] = [
+    (["search", "find", "look", "browse", "fetch", "retrieve", "query", "research", "read", "list"], "search"),
+    (["code", "implement", "develop", "program", "script", "function", "class", "module", "refactor", "build"], "code"),
+    (["analyze", "analysis", "review", "check", "audit", "inspect", "examine", "evaluate", "assess"], "analyze"),
+    (["write", "draft", "document", "report", "summarize", "explain", "describe", "compose", "generate"], "write"),
+    (["data", "database", "sql", "json", "csv", "table", "schema", "parse", "transform"], "data"),
+    (["test", "debug", "diagnose", "troubleshoot", "validate", "verify", "spec"], "test"),
+    (["deploy", "release", "publish", "launch", "run", "ship"], "deploy"),
+    (["fix", "repair", "resolve", "patch", "correct", "update", "edit", "change"], "fix"),
+]
 
 
 def _extract_agent_name(task: str) -> str:
-    """Best-effort short name from the most meaningful 2-3 words of a task."""
-    words = task.split()
-    meaningful = [
-        w.lower().strip(".,!?;:\"'()[]{}") for w in words
-        if w.lower().strip(".,!?;:\"'()[]{}") and
-        w.lower().strip(".,!?;:\"'()[]{}") not in _STOP_WORDS
-    ]
-    chosen = meaningful[:3] if meaningful else ["task"]
-    name = "-".join(chosen)
-    return name[:24] if name else "task"
+    """Pick a themed codename based on the task's primary action."""
+    import random
+    words = set(task.lower().split())
+    for keywords, category in _KEYWORD_CATEGORIES:
+        if any(kw in words for kw in keywords):
+            return random.choice(_CATEGORY_NAMES[category])
+    return random.choice(_DEFAULT_NAMES)
 
 
 class ChatApp(App):
@@ -776,11 +785,17 @@ class ChatApp(App):
         width: 1fr;
         height: 1fr;
     }
+    #chat-input {
+        dock: bottom;
+        height: 3;
+        border: round $accent;
+    }
     """
 
     BINDINGS = [
         Binding("q", "quit", "quit"),
         Binding("space", "toggle_mic", "mic", priority=True),
+        Binding("tab", "toggle_keyboard", "keyboard", priority=True),
         Binding("escape", "cancel_turn", "cancel turn"),
     ]
 
@@ -789,9 +804,13 @@ class ChatApp(App):
         self.session = session
         self._stop_flag = threading.Event()
         self._mic_event = threading.Event()
-        # Set when the main input loop is idle (waiting for mic press).
-        # The speech consumer only plays sub-agent summaries when this is set.
         self._main_idle = threading.Event()
+        # Keyboard input: set when user submits text via Enter.
+        self._keyboard_input: str | None = None
+        self._keyboard_event = threading.Event()
+        self._keyboard_mode = False
+        # PR decision routing.
+        self._awaiting_pr_agent_id: str | None = None
 
         from .agents import AgentManager, SpeechQueue
 
@@ -805,13 +824,14 @@ class ChatApp(App):
             with Vertical(id="main-area"):
                 yield TranscriptView(id="transcript")
                 yield ActivityTicker(id="ticker")
+        yield Input(placeholder="type a message... (Tab to switch to voice)", id="chat-input")
         yield StatusBar(id="status")
 
     def on_mount(self) -> None:
         self.title = "claude_zoom · chat"
         self.sub_title = f"cwd: {self.session.cwd or '.'}"
         status = self.query_one(StatusBar)
-        status.hint = "q quit · space talk · esc cancel"
+        status.hint = "q quit · space talk · tab keyboard · esc cancel"
         status.progress = "booting"
         status.action = "warming up"
         # Start the speech consumer that plays sub-agent summaries.
@@ -824,6 +844,29 @@ class ChatApp(App):
     # ─── Key actions ───────────────────────────────────────────────────────
 
     def action_toggle_mic(self) -> None:
+        if not self._keyboard_mode:
+            self._mic_event.set()
+
+    def action_toggle_keyboard(self) -> None:
+        self._keyboard_mode = not self._keyboard_mode
+        chat_input = self.query_one("#chat-input", Input)
+        if self._keyboard_mode:
+            chat_input.add_class("visible")
+            chat_input.focus()
+            self.query_one(StatusBar).action = "keyboard mode — type and press Enter"
+        else:
+            chat_input.remove_class("visible")
+            self.query_one(StatusBar).action = "voice mode — press SPACE to talk"
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter key in the keyboard input."""
+        text = event.value.strip()
+        if not text:
+            return
+        event.input.clear()
+        self._keyboard_input = text
+        self._keyboard_event.set()
+        # Also trigger mic_event so the wait loop unblocks.
         self._mic_event.set()
 
     def action_cancel_turn(self) -> None:
@@ -833,6 +876,7 @@ class ChatApp(App):
     async def action_quit(self) -> None:  # type: ignore[override]
         self._stop_flag.set()
         self._mic_event.set()
+        self._keyboard_event.set()
         self.session.cancel()
         self._agent_manager.kill_all()
         self.exit()
@@ -841,14 +885,18 @@ class ChatApp(App):
 
     @work(thread=True, exclusive=True)
     def _run_chat_loop(self) -> None:
-        from .agents import parse_spawn_markers, parse_voice_trigger
+        from .agents import (
+            parse_agent_target,
+            parse_spawn_markers,
+            parse_voice_trigger,
+        )
         from .chat import summarize_tool_args
         from .narrator import summarize_turn
-        from .voice import Recorder
+        from .voice import Recorder, play_sound
 
         intro = (
-            "Hey! Press space whenever you want to talk to me. "
-            "You can also ask me to spin off sub-agents for parallel work."
+            "Hey! Press space to talk, or Tab to type. "
+            "You can spin off sub-agents and talk to them by name or number."
         )
         self._append_message("claude", intro)
         self._set_progress("ready")
@@ -857,63 +905,97 @@ class ChatApp(App):
 
         turn = 0
         while not self._stop_flag.is_set():
-            # ── IDLE: wait for the user to press space ──
+            # ── IDLE: wait for input (voice or keyboard) ──
             self._set_ticker("")
             self._set_state("idle", "")
             self._set_progress(f"turn {turn}" if turn else "ready")
-            self._set_action("press SPACE to talk")
+            self._set_action(
+                "keyboard mode — type and press Enter"
+                if self._keyboard_mode
+                else "press SPACE to talk"
+            )
             self._main_idle.set()
-            if not self._wait_for_mic_press():
+            if not self._wait_for_input():
                 break
             self._main_idle.clear()
 
-            # ── LISTEN ──
-            turn += 1
-            self._set_state("listening", "")
-            self._set_progress(f"turn {turn}")
-            self._set_action("recording — press SPACE to send")
-            recorder = Recorder()
+            # ── GET TRANSCRIPT (voice or keyboard) ──
+            transcript: str | None = None
 
-            def _on_partial(text: str) -> None:
-                """Called from the partial-transcription thread."""
-                self._set_state("listening", f"[dim](heard so far)[/dim] {text}")
-                self._set_action(f"recording — {text[:50]}")
+            # Check if keyboard input arrived.
+            if self._keyboard_event.is_set():
+                self._keyboard_event.clear()
+                transcript = self._keyboard_input
+                self._keyboard_input = None
+            elif not self._keyboard_mode:
+                # Voice path: record until space pressed again.
+                turn += 1
+                self._set_state("listening", "")
+                self._set_progress(f"turn {turn}")
+                self._set_action("recording — press SPACE to send")
+                play_sound("ready")
+                recorder = Recorder()
 
-            try:
-                recorder.start(on_partial_transcript=_on_partial)
-            except Exception as e:  # noqa: BLE001
-                self._set_action(f"mic error: {str(e)[:60]}")
-                self._set_state("idle", "")
-                continue
+                try:
+                    recorder.start()
+                except Exception as e:  # noqa: BLE001
+                    self._set_action(f"mic error: {str(e)[:60]}")
+                    self._set_state("idle", "")
+                    continue
 
-            if not self._wait_for_mic_press():
-                recorder.close()
-                break
+                if not self._wait_for_input():
+                    recorder.close()
+                    break
 
-            self._set_state("thinking", "")
-            self._set_action("transcribing...")
-            try:
-                transcript = recorder.stop_and_transcribe()
-            except Exception as e:  # noqa: BLE001
-                self._set_action(f"transcribe error: {str(e)[:60]}")
-                self._set_state("idle", "")
-                continue
+                # Drain any keyboard event that fired during recording.
+                self._keyboard_event.clear()
+
+                self._set_state("thinking", "")
+                self._set_action("transcribing...")
+                try:
+                    transcript = recorder.stop_and_transcribe()
+                except Exception as e:  # noqa: BLE001
+                    self._set_action(f"transcribe error: {str(e)[:60]}")
+                    self._set_state("idle", "")
+                    continue
 
             if not transcript:
-                self._set_action("(no speech detected)")
+                self._set_action("(no input)")
                 self._set_state("idle", "")
                 continue
 
+            if turn == 0:
+                turn += 1
             self._append_message("user", transcript)
             self._set_action(f"heard: {transcript[:60]}")
 
-            # ── CHECK VOICE TRIGGER (direct sub-agent spawn) ──
+            # ── PR DECISION ROUTING ──
+            if self._awaiting_pr_agent_id:
+                agent_id = self._awaiting_pr_agent_id
+                self._awaiting_pr_agent_id = None
+                lower = transcript.lower()
+                if any(w in lower for w in ("yes", "yeah", "yep", "sure", "do it", "open")):
+                    self._set_action("creating PR...")
+                    pr_url = self._agent_manager.handle_pr_decision(agent_id, True)
+                    if pr_url:
+                        ack = f"PR created: {pr_url}"
+                    else:
+                        ack = "Failed to create PR. Branch is still pushed."
+                    self._append_message("claude", ack)
+                    self._speak_main(ack)
+                else:
+                    ack = "OK, branch is pushed if you want it later."
+                    self._agent_manager.handle_pr_decision(agent_id, False)
+                    self._append_message("claude", ack)
+                    self._speak_main(ack)
+                continue
+
+            # ── CHECK VOICE TRIGGER first (always spawns new) ──
             trigger_task = parse_voice_trigger(transcript)
             if trigger_task:
                 name = _extract_agent_name(trigger_task)
                 try:
                     self._spawn_sub(name, trigger_task)
-                    # Instant spoken acknowledgment so user doesn't wait.
                     ack = f"On it! Kicked off agent {name}."
                     self._append_message("claude", ack)
                     self._set_state("talking", ack)
@@ -921,6 +1003,28 @@ class ChatApp(App):
                 except Exception as e:  # noqa: BLE001
                     self._append_message("claude_error", f"spawn failed: {e}")
                 continue
+
+            # ── AGENT TARGETING (only if ref matches an existing agent) ──
+            target = parse_agent_target(transcript)
+            if target:
+                ref, msg = target
+                agent = self._agent_manager.resolve_agent_ref(ref)
+                if agent:
+                    if agent.status == "working":
+                        agent.task_queue.append(msg)
+                        ack = f"Queued that for agent {agent.name}."
+                    else:
+                        self._agent_manager.send_to_agent(
+                            agent, msg,
+                            on_event=self._on_sub_event,
+                            on_done=self._on_sub_done,
+                        )
+                        self._call(lambda: self._update_agent_panel(agent.id, "working"))
+                        ack = f"Sent to agent {agent.name}."
+                    self._append_message("claude", ack)
+                    self._speak_main(ack)
+                    continue
+                # ref didn't match any agent — fall through to main agent
 
             # ── WORK (main agent) ──
             # Speak Claude's first text response immediately while tool
@@ -1031,13 +1135,8 @@ class ChatApp(App):
                 pass
 
     def _speech_consumer(self) -> None:
-        """Dedicated thread: drains SpeechQueue when main is idle.
-
-        Politely waits until the main input loop is idle before playing a
-        sub-agent's summary. Supports barge-in: if the user presses space
-        during sub speech, the speech is terminated and the queue drained.
-        """
-        from .voice import speak_async
+        """Dedicated thread: drains SpeechQueue when main is idle."""
+        from .voice import play_sound, speak_async
 
         while not self._stop_flag.is_set():
             item = self._speech_queue.get(timeout=0.2)
@@ -1050,6 +1149,7 @@ class ChatApp(App):
             if self._stop_flag.is_set():
                 break
 
+            play_sound("done")
             self._append_message("sub_agent", item.text, agent_name=item.label)
             self._set_state("talking", item.text)
             self._set_action(f"speaking: {item.label}")
@@ -1062,7 +1162,6 @@ class ChatApp(App):
                             proc.terminate()
                             break
                         if self._mic_event.is_set():
-                            # Barge-in: stop speech, drain queue.
                             proc.terminate()
                             self._speech_queue.drain()
                             break
@@ -1072,17 +1171,24 @@ class ChatApp(App):
                         proc.wait(timeout=1.0)
                     except Exception:  # noqa: BLE001
                         pass
+
+            # If this item requires a yes/no response (PR prompt), flag it.
+            if item.requires_response and item.agent_id:
+                self._awaiting_pr_agent_id = item.agent_id
+
             self._set_state("idle", "")
             self._set_action("press SPACE to talk")
 
     # ─── Push-to-talk helpers ─────────────────────────────────────────────
 
-    def _wait_for_mic_press(self) -> bool:
-        """Block until ``_mic_event`` fires or the app is stopping."""
+    def _wait_for_input(self) -> bool:
+        """Block until mic press, keyboard submit, or app stop."""
         while not self._stop_flag.is_set():
             if self._mic_event.is_set():
                 self._mic_event.clear()
                 return True
+            if self._keyboard_event.is_set():
+                return True  # don't clear — chat loop reads it
             time.sleep(0.05)
         return False
 
@@ -1137,17 +1243,23 @@ class ChatApp(App):
 
     def _on_sub_done(self, agent_id: str) -> None:
         """Called when a sub-agent finishes or errors."""
+        self._call(lambda: self._update_agent_panel(agent_id))
 
-        def _update() -> None:
-            try:
-                panel = self.query_one(f"#agent-{agent_id}", MiniAgentPanel)
-                agent = self._agent_manager.agents.get(agent_id)
-                panel.agent_state = agent.status if agent else "done"
+    def _update_agent_panel(self, agent_id: str, force_state: str | None = None) -> None:
+        """Update a sub-agent's sidebar panel. Runs on main thread."""
+        try:
+            panel = self.query_one(f"#agent-{agent_id}", MiniAgentPanel)
+            agent = self._agent_manager.agents.get(agent_id)
+            if force_state:
+                panel.agent_state = force_state
+            elif agent:
+                panel.agent_state = agent.status
+            else:
+                panel.agent_state = "done"
+            if not force_state:
                 panel.ticker = ""
-            except Exception:  # noqa: BLE001
-                pass
-
-        self._call(_update)
+        except Exception:  # noqa: BLE001
+            pass
 
     def on_mini_agent_panel_delete_request(
         self, event: MiniAgentPanel.DeleteRequest

@@ -4,16 +4,22 @@ Manages sub-agents that run in parallel to the main ClaudeSession, each in
 its own git worktree.  A shared SpeechQueue serializes TTS output so agents
 "pop in" politely after the current speaker finishes.
 
+Sub-agents that make file changes can auto-commit, push a branch, and
+optionally open a PR via ``gh pr create``.
+
 Spawn triggers
 --------------
 1. **Voice trigger**: the user says "spin off an agent to …" or "in the
    background, …".  `parse_voice_trigger` extracts the task.
 2. **Main-agent marker**: the main Claude emits ``<SPAWN name="…">task</SPAWN>``
    in its assistant text.  `parse_spawn_markers` extracts them.
+3. **Agent targeting**: the user says "agent researcher, also check tests".
+   `parse_agent_target` routes the message to a specific sub.
 """
 
 from __future__ import annotations
 
+import os
 import queue
 import re
 import subprocess
@@ -26,23 +32,18 @@ from .chat import ClaudeSession
 # ─── Voice trigger detection ──────────────────────────────────────────────
 
 _VOICE_TRIGGERS: list[re.Pattern[str]] = [
-    # "spin off an agent to …", "spawn an agent to …", "launch an agent to …"
     re.compile(
         r"(?:spin\s+off|spawn|launch|start|kick\s+off)\s+"
         r"(?:a\s+)?(?:new\s+)?(?:sub[- ]?)?agent\s+(?:to\s+)?(.+)",
         re.IGNORECASE,
     ),
-    # "in the background, …"
     re.compile(r"in\s+the\s+background[,:]?\s+(.+)", re.IGNORECASE),
-    # "send an agent to …"
     re.compile(
         r"(?:send|dispatch)\s+(?:a\s+)?(?:new\s+)?agent\s+(?:to\s+)?(.+)",
         re.IGNORECASE,
     ),
 ]
 
-# Common filler that voice transcription prepends ("yeah let's", "ok can you",
-# "sure go ahead and", etc.).  Stripped before trigger matching.
 _FILLER_RE = re.compile(
     r"^(?:(?:yeah|yes|yep|ok|okay|sure|hey|please|so|um|uh|well|"
     r"let's|let\s+us|can\s+you|go\s+ahead\s+and|I\s+want\s+to|"
@@ -52,19 +53,36 @@ _FILLER_RE = re.compile(
 
 
 def parse_voice_trigger(transcript: str) -> str | None:
-    """If *transcript* matches a voice-trigger phrase, return the task.
-
-    Returns ``None`` when the transcript is a normal message for the main
-    agent.
-    """
-    text = transcript.strip()
-    # Strip conversational filler so "yeah let's spin off an agent" works.
-    text = _FILLER_RE.sub("", text).strip()
+    """If *transcript* matches a voice-trigger phrase, return the task."""
+    text = _FILLER_RE.sub("", transcript.strip()).strip()
     for pattern in _VOICE_TRIGGERS:
         m = pattern.search(text)
         if m:
             task = m.group(1).strip()
             return task if task else None
+    return None
+
+
+# ─── Agent targeting ──────────────────────────────────────────────────────
+
+_AGENT_TARGET_RE = re.compile(
+    r"(?:hey\s+)?agent\s+([\w][\w-]*)[,:]?\s+(.+)",
+    re.IGNORECASE,
+)
+
+
+def parse_agent_target(transcript: str) -> tuple[str, str] | None:
+    """Detect "agent <name-or-number>, <message>" in *transcript*.
+
+    Returns ``(agent_ref, message)`` where *agent_ref* is a name like
+    "researcher" or a number like "2".  Returns ``None`` if no target found.
+    """
+    text = _FILLER_RE.sub("", transcript.strip()).strip()
+    m = _AGENT_TARGET_RE.search(text)
+    if m:
+        ref = m.group(1).strip()
+        msg = m.group(2).strip()
+        return (ref, msg) if msg else None
     return None
 
 
@@ -87,14 +105,6 @@ _WORKTREE_DIR = ".claude_zoom_agents"
 
 
 def setup_worktree(base_cwd: str, agent_id: str) -> str:
-    """Create an isolated git worktree for a sub-agent.
-
-    Returns the absolute path to the new worktree directory.
-    Raises ``RuntimeError`` if the cwd is not a git repo or worktree
-    creation fails.
-    """
-    import os
-
     worktree_path = os.path.join(base_cwd, _WORKTREE_DIR, agent_id)
     result = subprocess.run(
         ["git", "worktree", "add", "--detach", worktree_path],
@@ -111,7 +121,6 @@ def setup_worktree(base_cwd: str, agent_id: str) -> str:
 
 
 def cleanup_worktree(base_cwd: str, worktree_path: str) -> None:
-    """Remove a git worktree created by `setup_worktree`."""
     subprocess.run(
         ["git", "worktree", "remove", "--force", worktree_path],
         cwd=base_cwd,
@@ -122,7 +131,6 @@ def cleanup_worktree(base_cwd: str, worktree_path: str) -> None:
 
 
 def is_git_repo(path: str) -> bool:
-    """Return True if *path* is inside a git repository."""
     result = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
         cwd=path,
@@ -133,6 +141,89 @@ def is_git_repo(path: str) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
+# ─── Auto-PR helpers ─────────────────────────────────────────────────────
+
+
+def sanitize_branch_name(task: str) -> str:
+    """Turn a task description into a git-safe branch name."""
+    slug = re.sub(r"[^\w\s-]", "", task.lower())
+    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
+    return f"claude-zoom/{slug[:50]}" if slug else "claude-zoom/agent-work"
+
+
+def _has_changes(cwd: str) -> int:
+    """Return the number of changed files in *cwd* (staged + unstaged)."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    lines = [l for l in result.stdout.splitlines() if l.strip()]
+    return len(lines)
+
+
+def commit_and_push(agent: "AgentInstance") -> str | None:
+    """Stage, commit, create branch, push. Returns branch name or None."""
+    cwd = agent.worktree_path
+    if cwd is None:
+        return None
+    n_changed = _has_changes(cwd)
+    if n_changed == 0:
+        return None
+
+    branch = sanitize_branch_name(agent.task)
+    # Create and checkout branch.
+    subprocess.run(
+        ["git", "checkout", "-b", branch],
+        cwd=cwd, capture_output=True, text=True, check=False,
+    )
+    # Stage all.
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=cwd, capture_output=True, text=True, check=False,
+    )
+    # Commit.
+    msg = f"{agent.name}: {agent.task[:100]}"
+    subprocess.run(
+        ["git", "commit", "-m", msg],
+        cwd=cwd, capture_output=True, text=True, check=False,
+    )
+    # Push.
+    result = subprocess.run(
+        ["git", "push", "-u", "origin", branch],
+        cwd=cwd, capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return branch
+
+
+def create_pr(agent: "AgentInstance", branch: str) -> str | None:
+    """Create a GitHub PR via ``gh`` and return the PR URL, or None."""
+    cwd = agent.worktree_path or "."
+    title = f"[claude-zoom] {agent.name}: {agent.task[:60]}"
+    body = (
+        f"## Summary\n"
+        f"Auto-generated by claude-zoom sub-agent **{agent.name}**.\n\n"
+        f"**Task:** {agent.task}\n\n"
+        f"---\n"
+        f"Generated with [claude-zoom](https://github.com/Kwang8/claude_zoom)"
+    )
+    result = subprocess.run(
+        ["gh", "pr", "create", "--title", title, "--body", body, "--head", branch],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    # gh prints the PR URL on stdout.
+    return result.stdout.strip() or None
+
+
 # ─── Speech queue ─────────────────────────────────────────────────────────
 
 
@@ -140,6 +231,8 @@ def is_git_repo(path: str) -> bool:
 class SpeechItem:
     label: str  # e.g. "claude" or "agent todo-search"
     text: str
+    requires_response: bool = False  # True → next user input is a yes/no decision
+    agent_id: str = ""  # set when requires_response is True
 
 
 class SpeechQueue:
@@ -148,8 +241,18 @@ class SpeechQueue:
     def __init__(self) -> None:
         self._q: queue.Queue[SpeechItem] = queue.Queue()
 
-    def put(self, label: str, text: str) -> None:
-        self._q.put(SpeechItem(label=label, text=text))
+    def put(
+        self,
+        label: str,
+        text: str,
+        *,
+        requires_response: bool = False,
+        agent_id: str = "",
+    ) -> None:
+        self._q.put(SpeechItem(
+            label=label, text=text,
+            requires_response=requires_response, agent_id=agent_id,
+        ))
 
     def get(self, timeout: float = 0.2) -> SpeechItem | None:
         try:
@@ -158,7 +261,6 @@ class SpeechQueue:
             return None
 
     def drain(self) -> None:
-        """Discard all pending items (e.g. on user barge-in)."""
         while True:
             try:
                 self._q.get_nowait()
@@ -174,6 +276,8 @@ in 1-2 sentences. Do not ask follow-up questions. Do not narrate your tool \
 calls. Just do the work and report the result.
 """
 
+AgentStatus = Literal["working", "done", "error", "pr_pending"]
+
 
 @dataclass
 class AgentInstance:
@@ -181,16 +285,20 @@ class AgentInstance:
     name: str
     session: ClaudeSession
     worktree_path: str | None
+    base_cwd: str
     task: str
-    status: Literal["working", "done", "error"] = "working"
+    status: AgentStatus = "working"
     events: list[dict[str, Any]] = field(default_factory=list)
     thread: threading.Thread | None = field(default=None, repr=False)
+    task_queue: list[str] = field(default_factory=list)
+    branch: str | None = None  # set after commit_and_push
+    number: int = 0  # 1-indexed display number
 
 
 class AgentManager:
     """Manages the pool of sub-agents running alongside the main session."""
 
-    def __init__(self, speech_queue: SpeechQueue, max_agents: int = 5) -> None:
+    def __init__(self, speech_queue: SpeechQueue, max_agents: int = 10) -> None:
         self.agents: dict[str, AgentInstance] = {}
         self.speech_queue = speech_queue
         self.max_agents = max_agents
@@ -208,23 +316,14 @@ class AgentManager:
         on_event: Any | None = None,
         on_done: Any | None = None,
     ) -> AgentInstance:
-        """Create and start a new sub-agent.
-
-        *on_event(agent_id, event)* is called from the sub's thread on each
-        stream-json event (for updating the TUI ticker).
-
-        *on_done(agent_id)* is called when the sub finishes or errors (for
-        updating the TUI panel state).
-        """
         with self._lock:
-            if len(self.agents) >= self.max_agents:
+            if len([a for a in self.agents.values() if a.status == "working"]) >= self.max_agents:
                 raise RuntimeError(
                     f"max {self.max_agents} concurrent sub-agents reached"
                 )
             self._counter += 1
             agent_id = f"sub-{self._counter}"
 
-        # Set up isolated worktree if possible.
         worktree_path: str | None = None
         cwd = base_cwd
         if is_git_repo(base_cwd):
@@ -232,7 +331,7 @@ class AgentManager:
                 worktree_path = setup_worktree(base_cwd, agent_id)
                 cwd = worktree_path
             except RuntimeError:
-                pass  # fall back to shared cwd
+                pass
 
         session = ClaudeSession(
             cwd=cwd,
@@ -246,45 +345,13 @@ class AgentManager:
             name=name,
             session=session,
             worktree_path=worktree_path,
+            base_cwd=base_cwd,
             task=task,
+            number=self._counter,
         )
 
         def _worker() -> None:
-            from .chat import summarize_tool_args
-            from .narrator import summarize_turn
-
-            try:
-                for event in agent.session.send(agent.task):
-                    agent.events.append(event)
-                    if on_event is not None:
-                        try:
-                            on_event(agent_id, event)
-                        except Exception:  # noqa: BLE001
-                            pass
-                agent.status = "done"
-
-                # Summarize and queue speech.
-                try:
-                    summary = summarize_turn(agent.task, agent.events)
-                except Exception as e:  # noqa: BLE001
-                    summary = f"Agent {agent.name} hit a summarize error: {e}"
-                if not summary:
-                    summary = "Done."
-                self.speech_queue.put(f"agent {agent.name}", summary)
-            except Exception as e:  # noqa: BLE001
-                agent.status = "error"
-                self.speech_queue.put(
-                    f"agent {agent.name}", f"Error: {e}"
-                )
-            finally:
-                if on_done is not None:
-                    try:
-                        on_done(agent_id)
-                    except Exception:  # noqa: BLE001
-                        pass
-                # Clean up worktree.
-                if worktree_path is not None:
-                    cleanup_worktree(base_cwd, worktree_path)
+            self._run_agent_task(agent, on_event=on_event, on_done=on_done)
 
         thread = threading.Thread(target=_worker, daemon=True, name=agent_id)
         agent.thread = thread
@@ -293,22 +360,184 @@ class AgentManager:
         thread.start()
         return agent
 
+    def _run_agent_task(
+        self,
+        agent: AgentInstance,
+        *,
+        on_event: Any | None = None,
+        on_done: Any | None = None,
+    ) -> None:
+        """Run the agent's current task and process queued follow-ups."""
+        from .narrator import summarize_turn
+
+        try:
+            for event in agent.session.send(agent.task):
+                agent.events.append(event)
+                if on_event is not None:
+                    try:
+                        on_event(agent.id, event)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+            # Check for file changes → auto-PR flow.
+            branch = None
+            if agent.worktree_path and _has_changes(agent.worktree_path):
+                branch = commit_and_push(agent)
+                agent.branch = branch
+
+            # Summarize.
+            try:
+                summary = summarize_turn(agent.task, agent.events)
+            except Exception as e:  # noqa: BLE001
+                summary = f"Agent {agent.name} hit a summarize error: {e}"
+            if not summary:
+                summary = "Done."
+
+            if branch:
+                # PR flow: speak summary + ask about PR.
+                n = _has_changes(agent.worktree_path or ".")
+                agent.status = "pr_pending"
+                self.speech_queue.put(
+                    f"agent {agent.name}",
+                    f"{summary} I made changes and pushed branch {branch}. "
+                    f"Want me to open a PR?",
+                    requires_response=True,
+                    agent_id=agent.id,
+                )
+            else:
+                agent.status = "done"
+                self.speech_queue.put(f"agent {agent.name}", summary)
+
+        except Exception as e:  # noqa: BLE001
+            agent.status = "error"
+            self.speech_queue.put(f"agent {agent.name}", f"Error: {e}")
+        finally:
+            if on_done is not None:
+                try:
+                    on_done(agent.id)
+                except Exception:  # noqa: BLE001
+                    pass
+            # Only clean up worktree if no PR pending.
+            if agent.status != "pr_pending" and agent.worktree_path is not None:
+                cleanup_worktree(agent.base_cwd, agent.worktree_path)
+
+        # Process queued follow-up tasks.
+        while agent.task_queue and agent.status in ("done", "pr_pending"):
+            next_task = agent.task_queue.pop(0)
+            agent.task = next_task
+            agent.status = "working"
+            agent.events.clear()
+            if on_done is not None:
+                try:
+                    on_done(agent.id)
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                for event in agent.session.send(next_task):
+                    agent.events.append(event)
+                    if on_event is not None:
+                        try:
+                            on_event(agent.id, event)
+                        except Exception:  # noqa: BLE001
+                            pass
+                agent.status = "done"
+                try:
+                    summary = summarize_turn(next_task, agent.events)
+                except Exception as e:  # noqa: BLE001
+                    summary = f"Agent {agent.name} hit a summarize error: {e}"
+                if not summary:
+                    summary = "Done."
+                self.speech_queue.put(f"agent {agent.name}", summary)
+            except Exception as e:  # noqa: BLE001
+                agent.status = "error"
+                self.speech_queue.put(f"agent {agent.name}", f"Error: {e}")
+            finally:
+                if on_done is not None:
+                    try:
+                        on_done(agent.id)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+    def handle_pr_decision(self, agent_id: str, approved: bool) -> str | None:
+        """Handle user's yes/no response to the PR prompt.
+
+        Returns the PR URL if approved and created, else None.
+        """
+        with self._lock:
+            agent = self.agents.get(agent_id)
+        if agent is None or agent.status != "pr_pending":
+            return None
+
+        pr_url: str | None = None
+        if approved and agent.branch:
+            pr_url = create_pr(agent, agent.branch)
+
+        agent.status = "done"
+        if agent.worktree_path is not None:
+            cleanup_worktree(agent.base_cwd, agent.worktree_path)
+        return pr_url
+
+    def resolve_agent_ref(self, ref: str) -> AgentInstance | None:
+        """Find an agent by name or number (e.g. "2" → sub-2, "researcher" → name match)."""
+        with self._lock:
+            # Try number first.
+            if ref.isdigit():
+                num = int(ref)
+                for a in self.agents.values():
+                    if a.number == num:
+                        return a
+            # Try by name.
+            ref_lower = ref.lower()
+            for a in self.agents.values():
+                if a.name.lower() == ref_lower:
+                    return a
+            # Try by id suffix.
+            for a in self.agents.values():
+                if a.id.endswith(ref):
+                    return a
+        return None
+
+    def send_to_agent(
+        self,
+        agent: AgentInstance,
+        message: str,
+        *,
+        on_event: Any | None = None,
+        on_done: Any | None = None,
+    ) -> None:
+        """Send a follow-up message to an existing agent.
+
+        If the agent is working, queues the message. If done, restarts it.
+        """
+        if agent.status == "working":
+            agent.task_queue.append(message)
+            return
+
+        # Agent is idle — restart it with the new task.
+        agent.task = message
+        agent.status = "working"
+        agent.events.clear()
+
+        def _worker() -> None:
+            self._run_agent_task(agent, on_event=on_event, on_done=on_done)
+
+        thread = threading.Thread(target=_worker, daemon=True, name=agent.id)
+        agent.thread = thread
+        thread.start()
+
     def kill(self, agent_id: str) -> None:
-        """Cancel a sub-agent's in-flight subprocess."""
         with self._lock:
             agent = self.agents.get(agent_id)
         if agent is not None:
             agent.session.cancel()
 
     def kill_all(self) -> None:
-        """Cancel all running sub-agents."""
         with self._lock:
             ids = list(self.agents.keys())
         for aid in ids:
             self.kill(aid)
 
     def remove(self, agent_id: str) -> None:
-        """Remove a finished agent from the pool."""
         with self._lock:
             self.agents.pop(agent_id, None)
 
