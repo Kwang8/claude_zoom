@@ -77,6 +77,15 @@ export function loadState(cwd: string): AppState | null {
       })),
       agent_counter: data.agent_counter ?? 0,
       messages: data.messages ?? [],
+      conversations: (data.conversations ?? []).map((conv: any) => ({
+        id: conv.id,
+        status: conv.status === "compacted" ? "compacted" : "active",
+        summary: conv.summary ?? null,
+        start_timestamp: conv.start_timestamp ?? "",
+        end_timestamp: conv.end_timestamp ?? null,
+        spawned_agent_ids: Array.isArray(conv.spawned_agent_ids) ? conv.spawned_agent_ids : [],
+      })),
+      current_conversation_id: data.current_conversation_id ?? null,
     };
   } catch (e) {
     console.warn("[state] failed to load:", e);

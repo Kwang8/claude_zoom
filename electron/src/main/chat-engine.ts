@@ -148,6 +148,7 @@ export class ChatEngine {
   private _convMessages: Record<string, any>[] = [];
   private _convLog: ConversationData[] = [];
   private _compactionPending: boolean = false;
+  private _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     session: ClaudeSession,
@@ -205,6 +206,7 @@ export class ChatEngine {
       this._convMessages.push(msg);
     }
     this._emit(msg);
+    this._scheduleStateSave();
   }
 
   private _sendTicker(activity: string): void {
@@ -240,6 +242,7 @@ export class ChatEngine {
   }
 
   stop(): void {
+    this._flushStateSave();
     this._saveState();
     this._stopFlag.set();
     this._micEvent.set();
@@ -329,6 +332,7 @@ export class ChatEngine {
     };
     this._convLog.push(data);
     this._send("conversation_start", { conversation_id: id, timestamp });
+    this._scheduleStateSave();
   }
 
   private async _checkCompaction(): Promise<void> {
@@ -359,6 +363,7 @@ export class ChatEngine {
         });
         this._currentConvId = null;
         this._convMessages = [];
+        this._scheduleStateSave();
       }
     } catch (e) {
       console.warn("[engine] compaction check failed:", e);
@@ -815,6 +820,7 @@ export class ChatEngine {
       });
     }
     this._coordinator.notifySpawn(agent.id, agent.name, task);
+    this._scheduleStateSave();
   }
 
   private _onSubEvent(agentId: string, event: Record<string, any>): void {
@@ -846,6 +852,7 @@ export class ChatEngine {
         status: agent.status,
         name: agent.name,
       });
+      this._scheduleStateSave();
     }
   }
 
@@ -879,6 +886,20 @@ export class ChatEngine {
       current_conversation_id: this._currentConvId,
     };
     saveState(state, cwd);
+  }
+
+  private _scheduleStateSave(): void {
+    if (this._saveTimer) return;
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this._saveState();
+    }, 250);
+  }
+
+  private _flushStateSave(): void {
+    if (!this._saveTimer) return;
+    clearTimeout(this._saveTimer);
+    this._saveTimer = null;
   }
 
   private _restoreState(): string | null {
