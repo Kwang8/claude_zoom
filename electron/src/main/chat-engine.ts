@@ -222,6 +222,13 @@ export class ChatEngine {
     this._send("action", { text });
   }
 
+  private _isWelcomeBackMessage(msg: Record<string, any> | null | undefined): boolean {
+    if (!msg || msg.type !== "transcript_message" || msg.role !== "claude") {
+      return false;
+    }
+    return typeof msg.text === "string" && msg.text.startsWith("Welcome back! Resumed previous session");
+  }
+
   // ── Public API ──
 
   async start(): Promise<void> {
@@ -405,14 +412,19 @@ export class ChatEngine {
   // ── Main chat loop ──
 
   private async _runChatLoop(): Promise<void> {
-    let intro: string | null = null;
-    if (this._resume) intro = this._restoreState();
-    if (!intro) {
+    let introState: string | null | undefined;
+    if (this._resume) introState = this._restoreState();
+    let intro = introState;
+    if (intro === null) {
       intro = "Hey! Press space to talk. You can spin off sub-agents and talk to them by name or number.";
     }
-    this._sendTranscript("claude", intro);
+    if (intro) {
+      this._sendTranscript("claude", intro);
+    }
     this._sendProgress("ready");
-    await this._speak(intro);
+    if (intro) {
+      await this._speak(intro);
+    }
     this._micEvent.clear();
 
     let turn = 0;
@@ -911,7 +923,7 @@ export class ChatEngine {
     this._saveTimer = null;
   }
 
-  private _restoreState(): string | null {
+  private _restoreState(): string | null | undefined {
     const cwd = this.session.cwd || ".";
     const state = loadState(cwd);
     if (!state || !state.main_session_id) return null;
@@ -1003,9 +1015,10 @@ export class ChatEngine {
       .filter((agent): agent is AgentInstance => Boolean(agent))
       .map((agent) => formatAgentDisplayName(agent))
       .join(", ");
-    if (n) {
-      return `Welcome back! Resumed previous session with ${n} agent${n !== 1 ? "s" : ""}: ${names}. Press space to talk.`;
-    }
-    return "Welcome back! Resumed previous session. Press space to talk.";
+    const intro = n
+      ? `Welcome back! Resumed previous session with ${n} agent${n !== 1 ? "s" : ""}: ${names}. Press space to talk.`
+      : "Welcome back! Resumed previous session. Press space to talk.";
+    const lastMessage = state.messages?.[state.messages.length - 1];
+    return this._isWelcomeBackMessage(lastMessage) ? undefined : intro;
   }
 }
