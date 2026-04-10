@@ -190,6 +190,11 @@ def _transcribe_audio(audio: Any) -> str | None:
     if rms < 0.005:
         return None
 
+    # Cap audio at 30 seconds to prevent long transcription hangs.
+    max_samples = int(SAMPLE_RATE * 30)
+    if audio.size > max_samples:
+        audio = audio[:max_samples]
+
     model = _load_parakeet()
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_path = tmp.name
