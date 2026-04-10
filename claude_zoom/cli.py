@@ -111,6 +111,53 @@ def chat(cwd, model, permission_mode, append_system_prompt, log_file, fresh) -> 
     ChatApp(session, resume=not fresh).run()
 
 
+@main.command()
+@click.option(
+    "--cwd",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Working directory for the Claude subprocess.",
+)
+@click.option("--model", default="opus", show_default=True)
+@click.option(
+    "--permission-mode",
+    default="acceptEdits",
+    show_default=True,
+    type=click.Choice(
+        ["default", "acceptEdits", "bypassPermissions", "dontAsk", "plan"]
+    ),
+)
+@click.option("--port", default=8765, show_default=True, help="WebSocket port.")
+@click.option("--host", default="localhost", show_default=True)
+@click.option("--fresh", is_flag=True, default=False)
+@click.option("--log-file", default=None, type=click.Path())
+def serve(cwd, model, permission_mode, port, host, fresh, log_file) -> None:
+    """Start the WebSocket server for the Electron frontend."""
+    import asyncio
+
+    if log_file:
+        logging.basicConfig(
+            filename=log_file,
+            level=logging.DEBUG,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
+
+    if fresh:
+        from .state import clear_state
+        clear_state(cwd or ".")
+
+    from .chat import ClaudeSession
+    from .server import run_server
+
+    session = ClaudeSession(
+        cwd=cwd,
+        model=model,
+        permission_mode=permission_mode,
+        tools="",
+    )
+    asyncio.run(run_server(session, host=host, port=port, resume=not fresh))
+
+
 def _fetch_change(ref: str) -> ChangeContext:
     """Resolve a user ref (PR #, SHA, or GitHub URL) to a ChangeContext."""
     kind, payload = parse_ref(ref)
