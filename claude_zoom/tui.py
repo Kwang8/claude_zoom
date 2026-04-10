@@ -806,6 +806,9 @@ class ChatApp(App):
         self._main_idle = threading.Event()
         # PR decision routing.
         self._awaiting_pr_agent_id: str | None = None
+        # Smart routing: tracks which sub-agent last spoke so the next
+        # user message can be auto-routed to it.
+        self._last_sub_speaker_id: str | None = None
 
         from .agents import AgentManager, SpeechQueue
 
@@ -861,6 +864,7 @@ class ChatApp(App):
     @work(thread=True, exclusive=True)
     def _run_chat_loop(self) -> None:
         from .agents import (
+            classify_message_target,
             parse_agent_target,
             parse_spawn_markers,
             parse_voice_trigger,
@@ -870,7 +874,7 @@ class ChatApp(App):
         from .voice import Recorder, play_sound
 
         intro = (
-            "Hey! Press space to talk, or Tab to type. "
+            "Hey! Press space to talk. "
             "You can spin off sub-agents and talk to them by name or number."
         )
         self._append_message("claude", intro)
@@ -937,6 +941,10 @@ class ChatApp(App):
             self._append_message("user", transcript)
             self._set_action(f"heard: {transcript[:60]}")
 
+            # Consume last-sub-speaker tracking for this turn.
+            last_sub_id = self._last_sub_speaker_id
+            self._last_sub_speaker_id = None
+
             # ── PR DECISION ROUTING ──
             if self._awaiting_pr_agent_id:
                 agent_id = self._awaiting_pr_agent_id
@@ -993,6 +1001,30 @@ class ChatApp(App):
                     self._speak_main(ack)
                     continue
                 # ref didn't match any agent — fall through to main agent
+
+            # ── SMART ROUTING: did a sub-agent just speak? ──
+            if last_sub_id:
+                agent = self._agent_manager.agents.get(last_sub_id)
+                if agent and agent.status != "error":
+                    self._set_action("routing...")
+                    route = classify_message_target(
+                        transcript, agent.name, agent.task,
+                    )
+                    if route == "agent":
+                        if agent.status == "working":
+                            agent.task_queue.append(transcript)
+                            ack = f"Queued that for agent {agent.name}."
+                        else:
+                            self._agent_manager.send_to_agent(
+                                agent, transcript,
+                                on_event=self._on_sub_event,
+                                on_done=self._on_sub_done,
+                            )
+                            self._call(lambda: self._update_agent_panel(agent.id, "working"))
+                            ack = f"Sent to agent {agent.name}."
+                        self._append_message("claude", ack)
+                        self._speak_main(ack)
+                        continue
 
             # ── WORK (main agent) ──
             # Speak Claude's first text response immediately while tool
@@ -1139,6 +1171,10 @@ class ChatApp(App):
                         proc.wait(timeout=1.0)
                     except Exception:  # noqa: BLE001
                         pass
+
+            # Track which sub-agent just spoke for smart routing.
+            if item.agent_id:
+                self._last_sub_speaker_id = item.agent_id
 
             # If this item requires a yes/no response (PR prompt), flag it.
             if item.requires_response and item.agent_id:

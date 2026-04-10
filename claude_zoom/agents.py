@@ -406,11 +406,11 @@ class AgentManager:
                 )
             else:
                 agent.status = "done"
-                self.speech_queue.put(f"agent {agent.name}", summary)
+                self.speech_queue.put(f"agent {agent.name}", summary, agent_id=agent.id)
 
         except Exception as e:  # noqa: BLE001
             agent.status = "error"
-            self.speech_queue.put(f"agent {agent.name}", f"Error: {e}")
+            self.speech_queue.put(f"agent {agent.name}", f"Error: {e}", agent_id=agent.id)
         finally:
             if on_done is not None:
                 try:
@@ -447,10 +447,10 @@ class AgentManager:
                     summary = f"Agent {agent.name} hit a summarize error: {e}"
                 if not summary:
                     summary = "Done."
-                self.speech_queue.put(f"agent {agent.name}", summary)
+                self.speech_queue.put(f"agent {agent.name}", summary, agent_id=agent.id)
             except Exception as e:  # noqa: BLE001
                 agent.status = "error"
-                self.speech_queue.put(f"agent {agent.name}", f"Error: {e}")
+                self.speech_queue.put(f"agent {agent.name}", f"Error: {e}", agent_id=agent.id)
             finally:
                 if on_done is not None:
                     try:
@@ -550,3 +550,46 @@ class AgentManager:
     def all_agents(self) -> list[AgentInstance]:
         with self._lock:
             return list(self.agents.values())
+
+
+# ─── Smart message routing ───────────────────────────────────────────────
+
+def classify_message_target(
+    transcript: str,
+    last_speaker_name: str,
+    last_speaker_task: str,
+) -> str:
+    """Decide if the user is replying to a sub-agent or talking to main.
+
+    Uses a fast Haiku call. Returns ``"agent"`` or ``"main"``.
+    """
+    import json
+
+    prompt = (
+        f'Sub-agent "{last_speaker_name}" just finished and reported on its '
+        f'task: "{last_speaker_task}"\n'
+        f'The user then said: "{transcript}"\n\n'
+        f"Is the user directing this at the sub-agent (giving it follow-up "
+        f"work, responding to its report, or continuing the conversation with "
+        f"it), or is the user talking to the main assistant about something "
+        f"unrelated?\n"
+        f"Reply with exactly one word: AGENT or MAIN"
+    )
+
+    result = subprocess.run(
+        ["claude", "-p", "--output-format", "json", "--model", "haiku"],
+        input=prompt,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return "main"
+
+    try:
+        envelope = json.loads(result.stdout)
+        answer = (envelope.get("result") or "").strip().upper()
+    except (json.JSONDecodeError, AttributeError):
+        return "main"
+
+    return "agent" if "AGENT" in answer else "main"
