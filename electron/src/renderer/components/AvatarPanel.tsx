@@ -3,6 +3,8 @@ import type { AppState } from "../types/messages";
 interface Props {
   state: AppState;
   narration: string;
+  selected?: boolean;
+  onClick?: () => void;
 }
 
 const STATE_LABELS: Record<AppState, string> = {
@@ -13,9 +15,13 @@ const STATE_LABELS: Record<AppState, string> = {
   talking: "talking...",
 };
 
-export function AvatarPanel({ state, narration }: Props) {
+export function AvatarPanel({ state, narration, selected = false, onClick }: Props) {
   return (
-    <div className="avatar-panel">
+    <div
+      className={`avatar-panel${selected ? " selected" : ""}${onClick ? " clickable" : ""}`}
+      onClick={onClick}
+      style={onClick ? { cursor: "pointer" } : undefined}
+    >
       <div className={`avatar-orb ${state}`}>
         <span style={{ fontSize: 28, color: "#fff" }}>C</span>
       </div>

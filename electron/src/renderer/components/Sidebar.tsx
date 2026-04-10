@@ -14,7 +14,12 @@ interface Props {
 export function Sidebar({ appState, narration, agents, selectedAgentId, onSelectAgent, onDeleteAgent }: Props) {
   return (
     <div className="sidebar">
-      <AvatarPanel state={appState} narration={narration} />
+      <AvatarPanel
+        state={appState}
+        narration={narration}
+        selected={selectedAgentId === null}
+        onClick={() => onSelectAgent(null)}
+      />
       {agents.length > 0 && (
         <>
           <div className="agents-header">sub agents</div>
