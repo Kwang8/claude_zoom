@@ -318,6 +318,16 @@ You are a sub-agent given one focused task. Complete it and state the outcome \
 in 1-2 sentences. Do not narrate your tool calls. Just do the work and report \
 the result.
 
+Interpret the assigned task as work for you to perform directly. If the task \
+mentions your own name or says things like "ask Argus...", "tell Argus...", \
+"send this to Argus...", or otherwise appears to instruct someone to contact \
+you, strip that framing and do the underlying work yourself.
+
+Never attempt to spawn, contact, trigger, authenticate, or hand off to other \
+agents, sessions, or remote APIs. You do not need workspace auth or an org UUID \
+to complete your assignment. Use the tools available in your environment and \
+answer from your own work.
+
 If you reach a decision point where you genuinely need user input before \
 continuing — e.g. permission to delete files, a choice between two approaches, \
 or critical missing information — emit exactly one block anywhere in your \
@@ -506,13 +516,7 @@ export class AgentManager {
       if (onDone) {
         try { onDone(agent.id); } catch {}
       }
-      if (agent.remote) {
-        try {
-          if ("close" in agent.session && typeof agent.session.close === "function") {
-            agent.session.close();
-          }
-        } catch {}
-      } else if (!["pr_pending", "needs_input"].includes(agent.status) && agent.worktreePath) {
+      if (!agent.remote && !["pr_pending", "needs_input"].includes(agent.status) && agent.worktreePath) {
         cleanupWorktree(agent.baseCwd, agent.worktreePath);
       }
     }
@@ -624,7 +628,11 @@ export class AgentManager {
 
   kill(agentId: string): void {
     const agent = this.agents.get(agentId);
-    if (agent) agent.session.cancel();
+    if (!agent) return;
+    agent.session.cancel();
+    if ("close" in agent.session && typeof agent.session.close === "function") {
+      void agent.session.close();
+    }
   }
 
   killAll(): void {

@@ -59,6 +59,7 @@ function reducer(state: State, action: Action): State {
             text: msg.text,
             agent_name: msg.agent_name,
             agent_id: msg.agent_id,
+            kind: msg.kind,
             timestamp: msg.timestamp,
           },
         ],

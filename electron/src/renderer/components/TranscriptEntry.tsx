@@ -11,7 +11,19 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export function TranscriptEntry({ message }: Props) {
-  const { role, text, agent_name, timestamp } = message;
+  const { role, text, agent_name, kind, timestamp } = message;
+
+  if (kind === "tool_use") {
+    return (
+      <div className="transcript-entry transcript-tool-use">
+        <div className="transcript-header">
+          <span className="transcript-role tool_use">{agent_name || "agent"} tool</span>
+          <span className="transcript-time">{timestamp}</span>
+        </div>
+        <div className="transcript-body">{text}</div>
+      </div>
+    );
+  }
 
   if (role === "system") {
     return (

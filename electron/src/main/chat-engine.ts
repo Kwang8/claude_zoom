@@ -59,6 +59,24 @@ function stripSpawnMarkers(text: string): string {
   return text.replace(/<SPAWN[^>]*>.*?<\/SPAWN>/gis, "").trim();
 }
 
+function rewriteDirectedAgentMessage(agentName: string, msg: string): string {
+  const escaped = agentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`^ask\\s+${escaped}[,\\s:]+(?:to\\s+)?`, "i"),
+    new RegExp(`^tell\\s+${escaped}[,\\s:]+(?:to\\s+)?`, "i"),
+    new RegExp(`^send\\s+(?:this\\s+)?to\\s+${escaped}[,\\s:]+`, "i"),
+    new RegExp(`^${escaped}[,\\s:]+`, "i"),
+  ];
+
+  for (const pattern of patterns) {
+    if (pattern.test(msg)) {
+      const rewritten = msg.replace(pattern, "").trim();
+      if (rewritten) return rewritten;
+    }
+  }
+  return msg.trim();
+}
+
 // Agent naming
 const KEYWORD_CATEGORIES: [Set<string>, string][] = [
   [new Set(["search", "find", "look", "grep", "locate"]), "search"],
@@ -156,13 +174,20 @@ export class ChatEngine {
     this._send("state_change", { state, narration });
   }
 
-  private _sendTranscript(role: string, text: string, agentName: string = "", agentId: string = ""): void {
+  private _sendTranscript(
+    role: string,
+    text: string,
+    agentName: string = "",
+    agentId: string = "",
+    kind: string = ""
+  ): void {
     const msg: Record<string, any> = {
       type: "transcript_message",
       role,
       text,
       agent_name: agentName,
       agent_id: agentId,
+      kind,
       timestamp: new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" }),
     };
     this._transcriptLog.push(msg);
@@ -548,13 +573,14 @@ export class ChatEngine {
     msg: string,
     suffix: string = ""
   ): Promise<void> {
+    const rewritten = rewriteDirectedAgentMessage(agent.name, msg);
     let ack: string;
     if (agent.status === "working") {
-      agent.taskQueue.push(msg);
+      agent.taskQueue.push(rewritten);
       ack = `Queued that for agent ${agent.name}.`;
     } else {
       this._agentManager.sendToAgent(
-        agent, msg,
+        agent, rewritten,
         (id, ev) => this._onSubEvent(id, ev),
         (id) => this._onSubDone(id),
       );
@@ -696,11 +722,15 @@ export class ChatEngine {
 
   private _onSubEvent(agentId: string, event: Record<string, any>): void {
     if (event.type !== "assistant") return;
+    const agent = this._agentManager.agents.get(agentId);
     const content = event.message?.content || [];
     for (const item of content) {
       if (item.type === "tool_use") {
         const tname = item.name || "?";
         const short = summarizeToolArgs(tname, item.input || {});
+        if (agent) {
+          this._sendTranscript("system", `${tname}(${short})`, agent.name, agent.id, "tool_use");
+        }
         this._send("agent_status", {
           agent_id: agentId,
           status: "working",

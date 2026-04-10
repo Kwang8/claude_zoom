@@ -341,6 +341,96 @@
   font-style: italic;
 }
 
+.transcript-tool-use {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 35%, var(--border) 65%);
+  background: color-mix(in srgb, var(--bg-card) 82%, var(--accent-cyan) 18%);
+  border-radius: var(--radius-sm);
+}
+
+.transcript-role.tool_use {
+  color: var(--accent-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+}
+
+.transcript-tool-use .transcript-body {
+  padding-left: 0;
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tool-stack {
+  margin: 10px 0 16px;
+}
+
+.tool-stack-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.tool-stack-toggle:hover {
+  color: var(--accent-cyan);
+}
+
+.tool-stack-chevron {
+  color: var(--accent-cyan);
+}
+
+.tool-stack-cards {
+  position: relative;
+  padding-top: 8px;
+}
+
+.tool-stack-layer {
+  position: relative;
+}
+
+.tool-stack:not(.expanded) .tool-stack-layer.latest::before,
+.tool-stack:not(.expanded) .tool-stack-layer.latest::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent-cyan) 20%, var(--border) 80%);
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--accent-cyan) 12%);
+  z-index: -1;
+}
+
+.tool-stack:not(.expanded) .tool-stack-layer.latest::before {
+  top: -8px;
+  bottom: 8px;
+  opacity: 0.5;
+}
+
+.tool-stack:not(.expanded) .tool-stack-layer.latest::after {
+  top: -4px;
+  bottom: 4px;
+  opacity: 0.8;
+}
+
+.tool-stack.expanded .tool-stack-layer {
+  margin-bottom: 8px;
+}
+
+.tool-stack.expanded .tool-stack-layer:last-child {
+  margin-bottom: 0;
+}
+
 /* ── Activity Ticker ── */
 
 .ticker {

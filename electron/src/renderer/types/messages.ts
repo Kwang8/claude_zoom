@@ -26,6 +26,7 @@ export interface TranscriptMessage {
   text: string;
   agent_name?: string;
   agent_id?: string;
+  kind?: "tool_use";
   timestamp: string;
 }
 
