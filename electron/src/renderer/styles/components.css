@@ -44,6 +44,15 @@
   align-items: center;
   gap: 8px;
   border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+
+.avatar-panel.selected {
+  background: color-mix(in srgb, var(--bg-secondary) 70%, var(--accent-cyan) 30%);
+}
+
+.avatar-panel.clickable:hover {
+  background: var(--bg-card-hover, rgba(255, 255, 255, 0.05));
 }
 
 .avatar-orb {
