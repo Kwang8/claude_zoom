@@ -7,7 +7,25 @@ import { ChatEngine } from "./chat-engine";
 let mainWindow: BrowserWindow | null = null;
 let engine: ChatEngine | null = null;
 
-function resolveTargetCwd(argv: string[], env: NodeJS.ProcessEnv): string | null {
+function findGitRoot(startDir: string): string | null {
+  let current = path.resolve(startDir);
+  while (true) {
+    if (fs.existsSync(path.join(current, ".git"))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function resolveTargetCwd(
+  argv: string[],
+  env: NodeJS.ProcessEnv,
+  fallbackStartDir: string
+): string | null {
   const envCwd = env.CLAUDE_ZOOM_CWD?.trim();
   let raw = envCwd || "";
   if (!raw) {
@@ -24,7 +42,9 @@ function resolveTargetCwd(argv: string[], env: NodeJS.ProcessEnv): string | null
     }
   }
 
-  if (!raw) return null;
+  if (!raw) {
+    return findGitRoot(fallbackStartDir);
+  }
 
   const resolved = path.resolve(raw);
   try {
@@ -42,7 +62,7 @@ function resolveTargetCwd(argv: string[], env: NodeJS.ProcessEnv): string | null
 }
 
 async function createWindow() {
-  const targetCwd = resolveTargetCwd(process.argv.slice(1), process.env);
+  const targetCwd = resolveTargetCwd(process.argv.slice(1), process.env, process.cwd());
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
