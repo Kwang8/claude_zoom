@@ -341,6 +341,17 @@
   font-style: italic;
 }
 
+.pr-link {
+  color: #00d4ff;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.4);
+  cursor: pointer;
+}
+
+.pr-link:hover {
+  border-bottom-color: #00d4ff;
+}
+
 .transcript-tool-use {
   margin: 10px 0 14px;
   padding: 10px 12px;

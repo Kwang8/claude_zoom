@@ -94,6 +94,7 @@ export function App() {
             messages={visibleTranscript}
             selectedAgent={selectedAgent}
             onBackToMain={() => setSelectedAgentId(null)}
+            githubRepo={state.githubRepo}
           />
           <ActivityTicker activity={state.ticker} />
         </div>

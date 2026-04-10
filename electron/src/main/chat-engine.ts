@@ -164,6 +164,10 @@ export class ChatEngine {
     this._remoteAuth = opts.remoteAuth ?? "oauth";
   }
 
+  get githubRepo(): string | null {
+    return this._remoteRepo || inferGithubRepo(this.session.cwd || ".");
+  }
+
   // ── Emit helpers ──
 
   private _send(msgType: string, data: Record<string, any> = {}): void {
