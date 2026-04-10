@@ -43,6 +43,8 @@ async function createWindow() {
         mainWindow?.webContents.send("engine-event", msg);
       } catch {}
     },
+    remoteRepo: process.env.CLAUDE_ZOOM_REMOTE_REPO || null,
+    remoteAuth: process.env.CLAUDE_ZOOM_REMOTE_AUTH === "api-key" ? "api-key" : "oauth",
   });
 
   // Handle commands from the renderer

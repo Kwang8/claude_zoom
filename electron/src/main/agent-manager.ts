@@ -1,28 +1,32 @@
 import { execFile, execFileSync } from "child_process";
-import fs from "fs";
-import os from "os";
 import path from "path";
-import { ClaudeSession, summarizeToolArgs } from "./claude-session";
+import { ClaudeSession } from "./claude-session";
+import { RemoteClaudeSession } from "./remote-session";
 import { summarizeTurn } from "./narrator";
 
 // ── Voice trigger detection ──
 
 const VOICE_TRIGGERS = [
-  /(?:spin\s+off|spawn|launch|start|kick\s+off)\s+(?:a\s+)?(?:new\s+)?(?:sub[- ]?)?agent\s+(?:to\s+)?(.+)/i,
+  /(?:spin\s+(?:off|up)|spawn|launch|start|kick\s+off|fire\s+up)\s+(?:a\s+)?(?:new\s+)?(?:(remote)\s+)?(?:sub[- ]?)?agent\s+(?:to\s+)?(.+)/i,
   /in\s+the\s+background[,:]?\s+(.+)/i,
   /(?:send|dispatch)\s+(?:a\s+)?(?:new\s+)?agent\s+(?:to\s+)?(.+)/i,
 ];
 
+const REMOTE_TASK_PREFIX_RE =
+  /^(?:(?:a|an)\s+)?remote\s+(?:sub[- ]?)?agent\s+(?:to\s+)?/i;
+
 const FILLER_RE =
   /^(?:(?:yeah|yes|yep|ok|okay|sure|hey|please|so|um|uh|well|let's|let\s+us|can\s+you|go\s+ahead\s+and|I\s+want\s+to|could\s+you|I'd\s+like\s+to)\s*,?\s*)+/i;
 
-export function parseVoiceTrigger(transcript: string): string | null {
+export function parseVoiceTrigger(transcript: string): [string, boolean] | null {
   const text = transcript.trim().replace(FILLER_RE, "").trim();
   for (const pattern of VOICE_TRIGGERS) {
     const m = pattern.exec(text);
     if (m) {
-      const task = m[1].trim();
-      return task || null;
+      const remoteHint = Boolean(m[1] && m.length > 2);
+      const taskIndex = m.length > 2 ? 2 : 1;
+      const normalized = normalizeSpawnRequest(m[taskIndex].trim(), remoteHint);
+      return normalized[0] ? normalized : null;
     }
   }
   return null;
@@ -47,17 +51,35 @@ export function parseAgentTarget(
 
 // ── SPAWN marker parsing ──
 
-const SPAWN_RE = /<SPAWN\s+name=["']([^"']+)["']\s*>(.*?)<\/SPAWN>/gis;
+const SPAWN_RE = /<SPAWN(?<attrs>[^>]*)>(?<body>.*?)<\/SPAWN>/gis;
+const SPAWN_NAME_RE = /\bname=["']([^"']+)["']/i;
+const SPAWN_REMOTE_RE = /\bremote=["']?(?:true|1|yes|remote)["']?/i;
 
-export function parseSpawnMarkers(text: string): [string, string][] {
-  const results: [string, string][] = [];
+export function parseSpawnMarkers(text: string): [string, string, boolean][] {
+  const results: [string, string, boolean][] = [];
   let m: RegExpExecArray | null;
-  // Reset lastIndex since we use /g flag
   SPAWN_RE.lastIndex = 0;
   while ((m = SPAWN_RE.exec(text)) !== null) {
-    results.push([m[1].trim(), m[2].trim()]);
+    const attrs = m.groups?.attrs || "";
+    const body = (m.groups?.body || "").trim();
+    const nameMatch = SPAWN_NAME_RE.exec(attrs);
+    if (!nameMatch) continue;
+    const remoteHint = SPAWN_REMOTE_RE.test(attrs);
+    const [task, remote] = normalizeSpawnRequest(body, remoteHint);
+    if (task) results.push([nameMatch[1].trim(), task, remote]);
   }
   return results;
+}
+
+function normalizeSpawnRequest(task: string, remoteHint: boolean): [string, boolean] {
+  let text = task.trim();
+  let remote = remoteHint;
+  const prefix = REMOTE_TASK_PREFIX_RE.exec(text);
+  if (prefix) {
+    remote = true;
+    text = text.slice(prefix[0].length).trim();
+  }
+  return [text, remote];
 }
 
 // ── Git worktree helpers ──
@@ -94,6 +116,21 @@ export function isGitRepo(repoPath: string): boolean {
     return out.trim() === "true";
   } catch {
     return false;
+  }
+}
+
+export function inferGithubRepo(repoPath: string): string | null {
+  try {
+    const url = execFileSync("git", ["config", "--get", "remote.origin.url"], {
+      cwd: repoPath,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    if (!url) return null;
+    const match = /github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/.exec(url);
+    return match ? `${match[1]}/${match[2]}` : null;
+  } catch {
+    return null;
   }
 }
 
@@ -298,16 +335,23 @@ export type AgentStatus = "working" | "done" | "error" | "pr_pending" | "needs_i
 export interface AgentInstance {
   id: string;
   name: string;
-  session: ClaudeSession;
+  session: ClaudeSession | RemoteClaudeSession;
   worktreePath: string | null;
   baseCwd: string;
   task: string;
+  remote: boolean;
+  repo: string | null;
+  auth: string;
   status: AgentStatus;
   events: Record<string, any>[];
   taskQueue: string[];
   branch: string | null;
   number: number;
   pendingQuestion: string | null;
+}
+
+function agentLabel(agent: AgentInstance): string {
+  return agent.remote ? `[remote agent] ${agent.name}` : `agent ${agent.name}`;
 }
 
 export type OnAgentEvent = (agentId: string, event: Record<string, any>) => void;
@@ -332,6 +376,9 @@ export class AgentManager {
     baseCwd: string;
     model?: string;
     permissionMode?: string;
+    remote?: boolean;
+    repo?: string | null;
+    auth?: string;
     onEvent?: OnAgentEvent;
     onDone?: OnAgentDone;
   }): AgentInstance {
@@ -345,19 +392,35 @@ export class AgentManager {
 
     let worktreePath: string | null = null;
     let cwd = opts.baseCwd;
-    if (isGitRepo(opts.baseCwd)) {
-      try {
-        worktreePath = setupWorktree(opts.baseCwd, agentId);
-        cwd = worktreePath;
-      } catch {}
-    }
+    const remote = opts.remote ?? false;
+    const auth = opts.auth ?? "oauth";
+    const repo = opts.repo ?? null;
+    let session: ClaudeSession | RemoteClaudeSession;
 
-    const session = new ClaudeSession({
-      cwd,
-      model: opts.model ?? "sonnet",
-      permissionMode: opts.permissionMode ?? "acceptEdits",
-      appendSystemPrompt: SUB_AGENT_SYSTEM_PROMPT,
-    });
+    if (remote) {
+      session = new RemoteClaudeSession({
+        cwd,
+        model: opts.model ?? "sonnet",
+        permissionMode: opts.permissionMode ?? "acceptEdits",
+        appendSystemPrompt: SUB_AGENT_SYSTEM_PROMPT,
+        repo,
+        auth,
+      });
+    } else {
+      if (isGitRepo(opts.baseCwd)) {
+        try {
+          worktreePath = setupWorktree(opts.baseCwd, agentId);
+          cwd = worktreePath;
+        } catch {}
+      }
+
+      session = new ClaudeSession({
+        cwd,
+        model: opts.model ?? "sonnet",
+        permissionMode: opts.permissionMode ?? "acceptEdits",
+        appendSystemPrompt: SUB_AGENT_SYSTEM_PROMPT,
+      });
+    }
 
     const agent: AgentInstance = {
       id: agentId,
@@ -366,6 +429,9 @@ export class AgentManager {
       worktreePath,
       baseCwd: opts.baseCwd,
       task: opts.task,
+      remote,
+      repo,
+      auth,
       status: "working",
       events: [],
       taskQueue: [],
@@ -401,14 +467,14 @@ export class AgentManager {
       if (question) {
         agent.pendingQuestion = question;
         agent.status = "needs_input";
-        this.speechQueue.put(`agent ${agent.name}`, `I have a question: ${question}`, {
+        this.speechQueue.put(agentLabel(agent), `I have a question: ${question}`, {
           requiresResponse: true,
           agentId: agent.id,
           questionType: "agent_question",
         });
       } else {
         let branch: string | null = null;
-        if (agent.worktreePath && hasChanges(agent.worktreePath)) {
+        if (!agent.remote && agent.worktreePath && hasChanges(agent.worktreePath)) {
           branch = commitAndPush(agent);
           agent.branch = branch;
         }
@@ -424,23 +490,29 @@ export class AgentManager {
         if (branch) {
           agent.status = "pr_pending";
           this.speechQueue.put(
-            `agent ${agent.name}`,
+            agentLabel(agent),
             `${summary} I made changes and pushed branch ${branch}. Want me to open a PR?`,
             { requiresResponse: true, agentId: agent.id, questionType: "pr" }
           );
         } else {
           agent.status = "done";
-          this.speechQueue.put(`agent ${agent.name}`, summary, { agentId: agent.id });
+          this.speechQueue.put(agentLabel(agent), summary, { agentId: agent.id });
         }
       }
     } catch (e) {
       agent.status = "error";
-      this.speechQueue.put(`agent ${agent.name}`, `Error: ${e}`, { agentId: agent.id });
+      this.speechQueue.put(agentLabel(agent), `Error: ${e}`, { agentId: agent.id });
     } finally {
       if (onDone) {
         try { onDone(agent.id); } catch {}
       }
-      if (!["pr_pending", "needs_input"].includes(agent.status) && agent.worktreePath) {
+      if (agent.remote) {
+        try {
+          if ("close" in agent.session && typeof agent.session.close === "function") {
+            agent.session.close();
+          }
+        } catch {}
+      } else if (!["pr_pending", "needs_input"].includes(agent.status) && agent.worktreePath) {
         cleanupWorktree(agent.baseCwd, agent.worktreePath);
       }
     }
@@ -466,10 +538,10 @@ export class AgentManager {
           summary = `Agent ${agent.name} hit a summarize error: ${e}`;
         }
         if (!summary) summary = "Done.";
-        this.speechQueue.put(`agent ${agent.name}`, summary, { agentId: agent.id });
+        this.speechQueue.put(agentLabel(agent), summary, { agentId: agent.id });
       } catch (e) {
         agent.status = "error";
-        this.speechQueue.put(`agent ${agent.name}`, `Error: ${e}`, { agentId: agent.id });
+        this.speechQueue.put(agentLabel(agent), `Error: ${e}`, { agentId: agent.id });
       } finally {
         if (onDone) { try { onDone(agent.id); } catch {} }
       }

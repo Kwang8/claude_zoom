@@ -14,6 +14,9 @@ export interface AgentState {
   status: string;
   number: number;
   branch: string | null;
+  remote?: boolean;
+  repo?: string | null;
+  auth?: string;
 }
 
 export interface AppState {
@@ -48,7 +51,12 @@ export function loadState(cwd: string): AppState | null {
       main_session_id: data.main_session_id ?? null,
       main_model: data.main_model ?? "opus",
       main_cwd: data.main_cwd ?? null,
-      agents: data.agents ?? [],
+      agents: (data.agents ?? []).map((agent: any) => ({
+        ...agent,
+        remote: Boolean(agent.remote),
+        repo: agent.repo ?? null,
+        auth: agent.auth ?? "oauth",
+      })),
       agent_counter: data.agent_counter ?? 0,
       messages: data.messages ?? [],
     };

@@ -1,16 +1,17 @@
-import { ChildProcess } from "child_process";
 import { ClaudeSession, summarizeToolArgs } from "./claude-session";
 import {
   AgentInstance,
   AgentManager,
   SpeechQueue,
   classifyMessageTarget,
+  inferGithubRepo,
   parseAgentTarget,
   parseSpawnMarkers,
   parseVoiceTrigger,
 } from "./agent-manager";
 import { CoordinatorAgent } from "./coordinator";
 import { summarizeTurn } from "./narrator";
+import { RemoteClaudeSession } from "./remote-session";
 import { playSound, RecorderBridge, speakAsync } from "./voice";
 import { AppState, AgentState as AgentStateData, loadState, saveState } from "./state";
 
@@ -43,10 +44,6 @@ class Signal {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // ── Helpers ──
 
 function buildPromptWithImages(prompt: string, images: string[]): string {
@@ -59,7 +56,7 @@ function buildPromptWithImages(prompt: string, images: string[]): string {
 }
 
 function stripSpawnMarkers(text: string): string {
-  return text.replace(/<SPAWN\s+name=["'][^"']+["']\s*>.*?<\/SPAWN>/gis, "").trim();
+  return text.replace(/<SPAWN[^>]*>.*?<\/SPAWN>/gis, "").trim();
 }
 
 // Agent naming
@@ -112,6 +109,8 @@ export class ChatEngine {
   private _agentManager: AgentManager;
   private _coordinator: CoordinatorAgent;
   private _recorder: RecorderBridge | null = null;
+  private _remoteRepo: string | null;
+  private _remoteAuth: string;
 
   // Signals
   private _stopFlag = new Signal();
@@ -132,6 +131,8 @@ export class ChatEngine {
     opts: {
       onEmit: (msg: Record<string, any>) => void;
       resume?: boolean;
+      remoteRepo?: string | null;
+      remoteAuth?: string;
     }
   ) {
     this.session = session;
@@ -141,6 +142,8 @@ export class ChatEngine {
     this._speechQueue = new SpeechQueue();
     this._agentManager = new AgentManager(this._speechQueue);
     this._coordinator = new CoordinatorAgent(session.cwd || ".");
+    this._remoteRepo = opts.remoteRepo ?? null;
+    this._remoteAuth = opts.remoteAuth ?? "oauth";
   }
 
   // ── Emit helpers ──
@@ -395,12 +398,14 @@ export class ChatEngine {
     }
 
     // VOICE TRIGGER
-    const triggerTask = parseVoiceTrigger(transcript);
-    if (triggerTask) {
+    const trigger = parseVoiceTrigger(transcript);
+    if (trigger) {
+      const [triggerTask, triggerRemote] = trigger;
       const name = extractAgentName(triggerTask);
       try {
-        this._spawnSub(name, triggerTask);
-        const ack = `On it! Kicked off agent ${name}.`;
+        this._spawnSub(name, triggerTask, triggerRemote);
+        const kind = triggerRemote ? "remote agent" : "agent";
+        const ack = `On it! Kicked off ${kind} ${name}.`;
         this._sendTranscript("claude", ack);
         this._sendState("talking", ack);
         await this._speak(ack);
@@ -483,8 +488,8 @@ export class ChatEngine {
               this._sendTicker(`${tname}(${short})`);
             } else if (item.type === "text") {
               const text = item.text || "";
-              for (const [sname, stask] of parseSpawnMarkers(text)) {
-                try { this._spawnSub(sname, stask); } catch {}
+              for (const [sname, stask, sremote] of parseSpawnMarkers(text)) {
+                try { this._spawnSub(sname, stask, sremote); } catch {}
               }
               const cleaned = stripSpawnMarkers(text).trim();
               if (!earlyText && cleaned) {
@@ -654,14 +659,26 @@ export class ChatEngine {
 
   // ── Sub-agent helpers ──
 
-  private _spawnSub(name: string, task: string): void {
+  private _spawnSub(name: string, task: string, remote: boolean = false): void {
     const baseCwd = this.session.cwd || ".";
+    let repo = this._remoteRepo;
+    if (remote && !repo) {
+      repo = inferGithubRepo(baseCwd);
+    }
+    if (remote && !repo) {
+      throw new Error(
+        "Remote sub-agents need a GitHub repo. Set CLAUDE_ZOOM_REMOTE_REPO or configure remote.origin.url."
+      );
+    }
     const agent = this._agentManager.spawn({
       task: buildPromptWithImages(task, this._imageContext),
       name,
       baseCwd,
       model: "sonnet",
       permissionMode: this.session.permissionMode,
+      remote,
+      repo,
+      auth: this._remoteAuth,
       onEvent: (id, ev) => this._onSubEvent(id, ev),
       onDone: (id) => this._onSubDone(id),
     });
@@ -670,8 +687,9 @@ export class ChatEngine {
       name: agent.name,
       number: agent.number,
       task,
+      status: agent.status,
     });
-    this._sendTranscript("system", `spawned agent "${name}"`);
+    this._sendTranscript("system", `spawned ${remote ? "remote " : ""}agent "${name}"`);
     this._coordinator.notifySpawn(agent.id, agent.name, task);
   }
 
@@ -717,6 +735,9 @@ export class ChatEngine {
       status: a.status === "working" ? "done" : a.status,
       number: a.number,
       branch: a.branch,
+      remote: a.remote,
+      repo: a.repo,
+      auth: a.auth,
     }));
 
     const state: AppState = {
@@ -746,12 +767,21 @@ export class ChatEngine {
     }
 
     for (const a of state.agents) {
-      const session = new ClaudeSession({
-        cwd: a.worktree_path || a.base_cwd,
-        model: "sonnet",
-        permissionMode: this.session.permissionMode,
-        appendSystemPrompt: this._agentManager.subSystemPrompt(),
-      });
+      const session = a.remote
+        ? new RemoteClaudeSession({
+            cwd: a.base_cwd,
+            model: "sonnet",
+            permissionMode: this.session.permissionMode,
+            appendSystemPrompt: this._agentManager.subSystemPrompt(),
+            repo: a.repo,
+            auth: a.auth,
+          })
+        : new ClaudeSession({
+            cwd: a.worktree_path || a.base_cwd,
+            model: "sonnet",
+            permissionMode: this.session.permissionMode,
+            appendSystemPrompt: this._agentManager.subSystemPrompt(),
+          });
       session.sessionId = a.session_id;
 
       const agent: AgentInstance = {
@@ -761,6 +791,9 @@ export class ChatEngine {
         worktreePath: a.worktree_path,
         baseCwd: a.base_cwd,
         task: a.task,
+        remote: Boolean(a.remote),
+        repo: a.repo ?? null,
+        auth: a.auth ?? "oauth",
         status: a.status as any,
         events: [],
         taskQueue: [],

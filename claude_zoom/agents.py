@@ -29,14 +29,6 @@ from typing import Any, Literal
 
 from .chat import ClaudeSession
 
-# RemoteClaudeSession is imported lazily to avoid hard dep on modal.
-RemoteClaudeSession: type | None
-try:
-    from .remote import RemoteClaudeSession as _RCS
-    RemoteClaudeSession = _RCS
-except ImportError:
-    RemoteClaudeSession = None
-
 # ─── Voice trigger detection ──────────────────────────────────────────────
 
 _VOICE_TRIGGERS: list[re.Pattern[str]] = [
@@ -432,31 +424,20 @@ class AgentManager:
         cwd = base_cwd
 
         if remote:
-            if RemoteClaudeSession is None:
-                raise RuntimeError(
-                    "Remote deps not installed. Run: pip install -e '.[remote]'"
-                )
-            session = RemoteClaudeSession(
-                cwd=cwd,
-                model=model,
-                permission_mode=permission_mode,
-                append_system_prompt=SUB_AGENT_SYSTEM_PROMPT,
-                repo=repo,
-                auth=auth,
-            )
-        else:
-            if is_git_repo(base_cwd):
-                try:
-                    worktree_path = setup_worktree(base_cwd, agent_id)
-                    cwd = worktree_path
-                except RuntimeError:
-                    pass
-            session = ClaudeSession(
-                cwd=cwd,
-                model=model,
-                permission_mode=permission_mode,
-                append_system_prompt=SUB_AGENT_SYSTEM_PROMPT,
-            )
+            raise RuntimeError("Remote sub-agents are only supported by the Electron app")
+
+        if is_git_repo(base_cwd):
+            try:
+                worktree_path = setup_worktree(base_cwd, agent_id)
+                cwd = worktree_path
+            except RuntimeError:
+                pass
+        session = ClaudeSession(
+            cwd=cwd,
+            model=model,
+            permission_mode=permission_mode,
+            append_system_prompt=SUB_AGENT_SYSTEM_PROMPT,
+        )
 
         agent = AgentInstance(
             id=agent_id,
