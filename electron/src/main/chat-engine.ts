@@ -10,10 +10,10 @@ import {
   parseVoiceTrigger,
 } from "./agent-manager";
 import { CoordinatorAgent } from "./coordinator";
-import { summarizeTurn } from "./narrator";
+import { summarizeTurn, checkConversationComplete } from "./narrator";
 import { RemoteClaudeSession } from "./remote-session";
 import { playSound, RecorderBridge, speakAsync } from "./voice";
-import { AppState, AgentState as AgentStateData, loadState, saveState } from "./state";
+import { AppState, AgentState as AgentStateData, ConversationData, loadState, saveState } from "./state";
 
 // ── Async Signal (replaces threading.Event) ──
 
@@ -144,6 +144,10 @@ export class ChatEngine {
   private _lastSubSpeakerId: string | null = null;
   private _imageContext: string[] = [];
   private _pendingText: string | null = null;
+  private _currentConvId: string | null = null;
+  private _convMessages: Record<string, any>[] = [];
+  private _convLog: ConversationData[] = [];
+  private _compactionPending: boolean = false;
 
   constructor(
     session: ClaudeSession,
@@ -193,9 +197,13 @@ export class ChatEngine {
       agent_name: agentName,
       agent_id: agentId,
       kind,
+      conversation_id: this._currentConvId || undefined,
       timestamp: new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" }),
     };
     this._transcriptLog.push(msg);
+    if (this._currentConvId) {
+      this._convMessages.push(msg);
+    }
     this._emit(msg);
   }
 
@@ -305,8 +313,73 @@ export class ChatEngine {
     if (n) this._sendTranscript("system", `cleared ${n} image(s)`);
   }
 
+  // ── Conversation lifecycle ──
+
+  private _startConversation(): void {
+    const id = `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this._currentConvId = id;
+    this._convMessages = [];
+    this._compactionPending = false;
+    const timestamp = new Date().toLocaleTimeString("en-US", {
+      hour12: false, hour: "2-digit", minute: "2-digit",
+    });
+    const data: ConversationData = {
+      id, status: "active", summary: null,
+      start_timestamp: timestamp, end_timestamp: null, spawned_agent_ids: [],
+    };
+    this._convLog.push(data);
+    this._send("conversation_start", { conversation_id: id, timestamp });
+  }
+
+  private async _checkCompaction(): Promise<void> {
+    if (!this._currentConvId || this._convMessages.length < 2) return;
+    if (this._compactionPending) return;
+    this._compactionPending = true;
+
+    const convId = this._currentConvId;
+    try {
+      const result = await checkConversationComplete(this._convMessages);
+      // If user started talking again, the conversation is still active — skip
+      if (this._currentConvId !== convId) return;
+
+      if (result.shouldCompact) {
+        const timestamp = new Date().toLocaleTimeString("en-US", {
+          hour12: false, hour: "2-digit", minute: "2-digit",
+        });
+        const conv = this._convLog.find((c) => c.id === convId);
+        if (conv) {
+          conv.status = "compacted";
+          conv.summary = result.summary;
+          conv.end_timestamp = timestamp;
+        }
+        this._send("conversation_compacted", {
+          conversation_id: convId,
+          summary: result.summary,
+          timestamp,
+        });
+        this._currentConvId = null;
+        this._convMessages = [];
+      }
+    } catch (e) {
+      console.warn("[engine] compaction check failed:", e);
+    } finally {
+      this._compactionPending = false;
+    }
+  }
+
   /** Replay transcript + agent list to a newly connected renderer. */
   replayState(): void {
+    // Replay conversation events first
+    for (const conv of this._convLog) {
+      this._emit({ type: "conversation_start", conversation_id: conv.id, timestamp: conv.start_timestamp });
+      for (const agentId of conv.spawned_agent_ids) {
+        this._emit({ type: "conversation_agent_spawned", conversation_id: conv.id, agent_id: agentId });
+      }
+      if (conv.status === "compacted" && conv.summary) {
+        this._emit({ type: "conversation_compacted", conversation_id: conv.id, summary: conv.summary, timestamp: conv.end_timestamp || conv.start_timestamp });
+      }
+    }
+    // Then replay transcript messages and agents
     for (const msg of this._transcriptLog) {
       this._emit(msg);
     }
@@ -351,9 +424,11 @@ export class ChatEngine {
         const text = this._pendingText;
         this._pendingText = null;
         turn++;
+        if (!this._currentConvId) this._startConversation();
         this._sendTranscript("user", text);
         this._sendAction(`text: ${text.slice(0, 60)}`);
         await this._processUserInput(text, turn);
+        this._checkCompaction().catch(() => {});
         continue;
       }
 
@@ -406,9 +481,11 @@ export class ChatEngine {
         continue;
       }
 
+      if (!this._currentConvId) this._startConversation();
       this._sendTranscript("user", transcript);
       this._sendAction(`heard: ${transcript.slice(0, 60)}`);
       await this._processUserInput(transcript, turn);
+      this._checkCompaction().catch(() => {});
     }
 
     this._sendAction("bye");
@@ -729,6 +806,14 @@ export class ChatEngine {
       status: agent.status,
     });
     this._sendTranscript("system", `spawned ${remote ? "remote " : ""}agent "${name}"`);
+    if (this._currentConvId) {
+      const conv = this._convLog.find((c) => c.id === this._currentConvId);
+      if (conv) conv.spawned_agent_ids.push(agent.id);
+      this._send("conversation_agent_spawned", {
+        conversation_id: this._currentConvId,
+        agent_id: agent.id,
+      });
+    }
     this._coordinator.notifySpawn(agent.id, agent.name, task);
   }
 
@@ -790,6 +875,8 @@ export class ChatEngine {
       agents: agentStates,
       agent_counter: this._agentManager._counter,
       messages: this._transcriptLog.slice(-200),
+      conversations: this._convLog,
+      current_conversation_id: this._currentConvId,
     };
     saveState(state, cwd);
   }
@@ -801,6 +888,26 @@ export class ChatEngine {
 
     this.session.sessionId = state.main_session_id;
     this._agentManager._counter = state.agent_counter;
+
+    // Restore conversations
+    if (state.conversations?.length) {
+      this._convLog = state.conversations;
+      this._currentConvId = state.current_conversation_id || null;
+      for (const conv of this._convLog) {
+        this._emit({ type: "conversation_start", conversation_id: conv.id, timestamp: conv.start_timestamp });
+        for (const agentId of conv.spawned_agent_ids) {
+          this._emit({ type: "conversation_agent_spawned", conversation_id: conv.id, agent_id: agentId });
+        }
+        if (conv.status === "compacted" && conv.summary) {
+          this._emit({ type: "conversation_compacted", conversation_id: conv.id, summary: conv.summary, timestamp: conv.end_timestamp || conv.start_timestamp });
+        }
+      }
+      if (this._currentConvId) {
+        this._convMessages = (state.messages || []).filter(
+          (m: any) => m.conversation_id === this._currentConvId
+        );
+      }
+    }
 
     if (state.messages?.length) {
       this._transcriptLog = [...state.messages];

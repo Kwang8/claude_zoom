@@ -19,6 +19,15 @@ export interface AgentState {
   auth?: string;
 }
 
+export interface ConversationData {
+  id: string;
+  status: "active" | "compacted";
+  summary: string | null;
+  start_timestamp: string;
+  end_timestamp: string | null;
+  spawned_agent_ids: string[];
+}
+
 export interface AppState {
   main_session_id: string | null;
   main_model: string;
@@ -26,6 +35,8 @@ export interface AppState {
   agents: AgentState[];
   agent_counter: number;
   messages: Record<string, any>[];
+  conversations?: ConversationData[];
+  current_conversation_id?: string | null;
 }
 
 function statePath(cwd: string): string {

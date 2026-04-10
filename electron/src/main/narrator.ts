@@ -55,6 +55,78 @@ export function summarizeTurn(
   return sonnetSummarize(userMessage, events);
 }
 
+// ── Conversation compaction check ──
+
+const COMPACTION_SYSTEM_PROMPT = `\
+You are deciding if a voice conversation has reached a clear stopping point — a plan \
+was agreed, a question was answered, or work was delegated.
+
+Respond with EXACTLY one line of JSON, no other text:
+{"compact":true,"summary":"one-line title of what was discussed/decided"}
+or
+{"compact":false}
+
+Rules:
+- compact=true if: a clear plan was stated, work was delegated to agents, a question \
+was fully answered, or the user acknowledged completion.
+- compact=false if: the user asked something the assistant hasn't answered yet, the \
+conversation is mid-negotiation, or the response invited further input.
+- Summary should be under 12 words, past tense, no markdown.`;
+
+export interface CompactionResult {
+  shouldCompact: boolean;
+  summary: string;
+}
+
+export function checkConversationComplete(
+  messages: Record<string, any>[]
+): Promise<CompactionResult> {
+  let transcript = messages
+    .filter((m) => m.role && m.text)
+    .map((m) => `${m.role}: ${m.text}`)
+    .join("\n");
+
+  if (!transcript.trim()) {
+    return Promise.resolve({ shouldCompact: true, summary: "Empty conversation" });
+  }
+  if (transcript.length > MAX_TRANSCRIPT_CHARS) {
+    transcript = transcript.slice(-MAX_TRANSCRIPT_CHARS);
+  }
+
+  return new Promise((resolve) => {
+    const proc = execFile(
+      "claude",
+      [
+        "-p",
+        "--output-format", "json",
+        "--model", MODEL,
+        "--system-prompt", COMPACTION_SYSTEM_PROMPT,
+      ],
+      { timeout: 15_000 },
+      (err, stdout) => {
+        if (err) {
+          // On failure, don't compact — try again next turn
+          resolve({ shouldCompact: false, summary: "" });
+          return;
+        }
+        try {
+          const envelope = JSON.parse(stdout);
+          const text = (envelope.result || "").trim();
+          const result = JSON.parse(text);
+          resolve({
+            shouldCompact: Boolean(result.compact),
+            summary: result.summary || "Conversation",
+          });
+        } catch {
+          resolve({ shouldCompact: false, summary: "" });
+        }
+      }
+    );
+    proc.stdin?.write(transcript);
+    proc.stdin?.end();
+  });
+}
+
 function sonnetSummarize(
   userMessage: string,
   events: Record<string, any>[]

@@ -1,17 +1,22 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityTicker } from "./components/ActivityTicker";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TranscriptView } from "./components/TranscriptView";
+import { WorkLogView } from "./components/WorkLogView";
 import { useAppState } from "./hooks/useAppState";
 import { useIPC } from "./hooks/useIPC";
-import type { ClientMessage } from "./types/messages";
+
+type MainView =
+  | { mode: "worklog" }
+  | { mode: "conversation_detail"; conversationId: string };
 
 export function App() {
   const { state, handleMessage } = useAppState();
   const { send, connected } = useIPC(handleMessage);
   const [isRecording, setIsRecording] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [mainView, setMainView] = useState<MainView>({ mode: "worklog" });
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -29,12 +34,19 @@ export function App() {
         e.preventDefault();
         if (e.repeat) return;
         setSelectedAgentId(null);
+        setMainView({ mode: "worklog" });
         console.log("[app] space pressed, sending mic_start");
         setIsRecording(true);
         send({ type: "mic_start" });
       } else if (e.code === "Escape") {
         e.preventDefault();
-        send({ type: "cancel_turn" });
+        if (mainView.mode === "conversation_detail") {
+          setMainView({ mode: "worklog" });
+        } else if (selectedAgentId) {
+          setSelectedAgentId(null);
+        } else {
+          send({ type: "cancel_turn" });
+        }
       } else if (e.code === "KeyQ" && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         send({ type: "quit" });
@@ -57,7 +69,7 @@ export function App() {
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("keyup", onKeyUp, true);
     };
-  }, [send]);
+  }, [send, mainView, selectedAgentId]);
 
   const handleDeleteAgent = useCallback(
     (agentId: string) => {
@@ -72,10 +84,57 @@ export function App() {
     }
   }, [selectedAgentId, state.agents]);
 
+  // Conversation detail view
+  const selectedConversation = mainView.mode === "conversation_detail"
+    ? state.conversations.find((c) => c.id === mainView.conversationId)
+    : null;
+
+  const conversationMessages = useMemo(() => {
+    if (!selectedConversation) return [];
+    return state.transcript.slice(
+      selectedConversation.messageStartIndex,
+      selectedConversation.messageEndIndex + 1
+    );
+  }, [selectedConversation, state.transcript]);
+
   const selectedAgent = state.agents.find((agent) => agent.agent_id === selectedAgentId) || null;
-  const visibleTranscript = selectedAgent
+  const agentTranscript = selectedAgent
     ? state.transcript.filter((message) => message.agent_id === selectedAgent.agent_id)
-    : state.transcript;
+    : [];
+
+  // Determine what main area shows
+  let mainContent: React.ReactNode;
+  if (selectedAgent) {
+    mainContent = (
+      <TranscriptView
+        messages={agentTranscript}
+        selectedAgent={selectedAgent}
+        onBackToMain={() => setSelectedAgentId(null)}
+        githubRepo={state.githubRepo}
+      />
+    );
+  } else if (selectedConversation) {
+    mainContent = (
+      <TranscriptView
+        messages={conversationMessages}
+        selectedAgent={null}
+        onBackToMain={() => setMainView({ mode: "worklog" })}
+        title={selectedConversation.summary || "Conversation"}
+        githubRepo={state.githubRepo}
+      />
+    );
+  } else {
+    mainContent = (
+      <WorkLogView
+        conversations={state.conversations}
+        transcript={state.transcript}
+        agents={state.agents}
+        onSelectConversation={(id) =>
+          setMainView({ mode: "conversation_detail", conversationId: id })
+        }
+      />
+    );
+  }
 
   return (
     <div className="app">
@@ -90,12 +149,7 @@ export function App() {
           onDeleteAgent={handleDeleteAgent}
         />
         <div className="main-area">
-          <TranscriptView
-            messages={visibleTranscript}
-            selectedAgent={selectedAgent}
-            onBackToMain={() => setSelectedAgentId(null)}
-            githubRepo={state.githubRepo}
-          />
+          {mainContent}
           <ActivityTicker activity={state.ticker} />
         </div>
       </div>
