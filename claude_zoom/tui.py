@@ -674,6 +674,7 @@ class MiniAgentPanel(Static):
         "done": "[green]✓[/green]",
         "error": "[red]✗[/red]",
         "pr_pending": "[yellow]PR?[/yellow]",
+        "needs_input": "[magenta]?[/magenta]",
     }
 
     def __init__(self, agent_id: str, name: str, **kwargs: Any) -> None:
@@ -806,6 +807,8 @@ class ChatApp(App):
         self._main_idle = threading.Event()
         # PR decision routing.
         self._awaiting_pr_agent_id: str | None = None
+        # Agent question routing: set when an agent is paused waiting for user input.
+        self._awaiting_question_agent_id: str | None = None
         # Smart routing: tracks which sub-agent last spoke so the next
         # user message can be auto-routed to it.
         self._last_sub_speaker_id: str | None = None
@@ -965,6 +968,24 @@ class ChatApp(App):
                 else:
                     ack = "OK, branch is pushed if you want it later."
                     self._agent_manager.handle_pr_decision(agent_id, False)
+                    self._append_message("claude", ack)
+                    self._speak_main(ack)
+                continue
+
+            # ── AGENT QUESTION ROUTING ──
+            if self._awaiting_question_agent_id:
+                agent_id = self._awaiting_question_agent_id
+                self._awaiting_question_agent_id = None
+                agent = self._agent_manager.agents.get(agent_id)
+                if agent and agent.status == "needs_input":
+                    self._agent_manager.handle_agent_question(
+                        agent_id,
+                        transcript,
+                        on_event=self._on_sub_event,
+                        on_done=self._on_sub_done,
+                    )
+                    self._call(lambda a=agent: self._update_agent_panel(a.id, "working"))
+                    ack = f"Got it, forwarding your answer to agent {agent.name}."
                     self._append_message("claude", ack)
                     self._speak_main(ack)
                 continue
@@ -1212,9 +1233,13 @@ class ChatApp(App):
             if item.agent_id:
                 self._last_sub_speaker_id = item.agent_id
 
-            # If this item requires a yes/no response (PR prompt), flag it.
+            # If this item requires a response, flag the appropriate routing.
             if item.requires_response and item.agent_id:
-                self._awaiting_pr_agent_id = item.agent_id
+                if item.question_type == "agent_question":
+                    self._awaiting_question_agent_id = item.agent_id
+                    self._update_agent_panel_threadsafe(item.agent_id, "needs_input")
+                else:  # "pr" or legacy
+                    self._awaiting_pr_agent_id = item.agent_id
 
             self._set_state("idle", "")
             self._set_action("press SPACE to talk")
@@ -1288,6 +1313,10 @@ class ChatApp(App):
                 agent_id, agent.name, agent.task, agent.status
             )
         self._call(lambda: self._update_agent_panel(agent_id))
+
+    def _update_agent_panel_threadsafe(self, agent_id: str, force_state: str) -> None:
+        """Thread-safe wrapper — schedules panel update on the main thread."""
+        self._call(lambda: self._update_agent_panel(agent_id, force_state))
 
     def _update_agent_panel(self, agent_id: str, force_state: str | None = None) -> None:
         """Update a sub-agent's sidebar panel. Runs on main thread."""

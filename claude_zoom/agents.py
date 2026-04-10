@@ -231,8 +231,9 @@ def create_pr(agent: "AgentInstance", branch: str) -> str | None:
 class SpeechItem:
     label: str  # e.g. "claude" or "agent todo-search"
     text: str
-    requires_response: bool = False  # True → next user input is a yes/no decision
+    requires_response: bool = False  # True → next user input is routed back to agent
     agent_id: str = ""  # set when requires_response is True
+    question_type: str = ""  # "pr" | "agent_question" | ""
 
 
 class SpeechQueue:
@@ -248,10 +249,12 @@ class SpeechQueue:
         *,
         requires_response: bool = False,
         agent_id: str = "",
+        question_type: str = "",
     ) -> None:
         self._q.put(SpeechItem(
             label=label, text=text,
             requires_response=requires_response, agent_id=agent_id,
+            question_type=question_type,
         ))
 
     def get(self, timeout: float = 0.2) -> SpeechItem | None:
@@ -272,11 +275,40 @@ class SpeechQueue:
 
 SUB_AGENT_SYSTEM_PROMPT = """\
 You are a sub-agent given one focused task. Complete it and state the outcome \
-in 1-2 sentences. Do not ask follow-up questions. Do not narrate your tool \
-calls. Just do the work and report the result.
+in 1-2 sentences. Do not narrate your tool calls. Just do the work and report \
+the result.
+
+If you reach a decision point where you genuinely need user input before \
+continuing — e.g. permission to delete files, a choice between two approaches, \
+or critical missing information — emit exactly one block anywhere in your \
+response:
+
+<QUESTION>Your specific question here?</QUESTION>
+
+Then stop working. The user will be notified and their answer forwarded to you \
+in the next message. After receiving the answer, continue your task.
+
+Only use <QUESTION> when truly blocked. Most tasks should complete without it.
 """
 
-AgentStatus = Literal["working", "done", "error", "pr_pending"]
+AgentStatus = Literal["working", "done", "error", "pr_pending", "needs_input"]
+
+_QUESTION_RE = re.compile(r"<QUESTION>(.*?)</QUESTION>", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_question(events: list[dict]) -> str | None:
+    """Return the first <QUESTION> text from the last assistant message, or None."""
+    for event in reversed(events):
+        if event.get("type") != "assistant":
+            continue
+        content = (event.get("message") or {}).get("content") or []
+        for item in reversed(content):
+            if item.get("type") != "text":
+                continue
+            m = _QUESTION_RE.search(item.get("text") or "")
+            if m:
+                return m.group(1).strip()
+    return None
 
 
 @dataclass
@@ -293,6 +325,7 @@ class AgentInstance:
     task_queue: list[str] = field(default_factory=list)
     branch: str | None = None  # set after commit_and_push
     number: int = 0  # 1-indexed display number
+    pending_question: str | None = None  # set when status == "needs_input"
 
 
 class AgentManager:
@@ -379,34 +412,47 @@ class AgentManager:
                     except Exception:  # noqa: BLE001
                         pass
 
-            # Check for file changes → auto-PR flow.
-            branch = None
-            if agent.worktree_path and _has_changes(agent.worktree_path):
-                branch = commit_and_push(agent)
-                agent.branch = branch
-
-            # Summarize.
-            try:
-                summary = summarize_turn(agent.task, agent.events)
-            except Exception as e:  # noqa: BLE001
-                summary = f"Agent {agent.name} hit a summarize error: {e}"
-            if not summary:
-                summary = "Done."
-
-            if branch:
-                # PR flow: speak summary + ask about PR.
-                n = _has_changes(agent.worktree_path or ".")
-                agent.status = "pr_pending"
+            # Check for a pending question — agent needs user input before continuing.
+            question = _extract_question(agent.events)
+            if question:
+                agent.pending_question = question
+                agent.status = "needs_input"
                 self.speech_queue.put(
                     f"agent {agent.name}",
-                    f"{summary} I made changes and pushed branch {branch}. "
-                    f"Want me to open a PR?",
+                    f"I have a question: {question}",
                     requires_response=True,
                     agent_id=agent.id,
+                    question_type="agent_question",
                 )
             else:
-                agent.status = "done"
-                self.speech_queue.put(f"agent {agent.name}", summary, agent_id=agent.id)
+                # Check for file changes → auto-PR flow.
+                branch = None
+                if agent.worktree_path and _has_changes(agent.worktree_path):
+                    branch = commit_and_push(agent)
+                    agent.branch = branch
+
+                # Summarize.
+                try:
+                    summary = summarize_turn(agent.task, agent.events)
+                except Exception as e:  # noqa: BLE001
+                    summary = f"Agent {agent.name} hit a summarize error: {e}"
+                if not summary:
+                    summary = "Done."
+
+                if branch:
+                    # PR flow: speak summary + ask about PR.
+                    agent.status = "pr_pending"
+                    self.speech_queue.put(
+                        f"agent {agent.name}",
+                        f"{summary} I made changes and pushed branch {branch}. "
+                        f"Want me to open a PR?",
+                        requires_response=True,
+                        agent_id=agent.id,
+                        question_type="pr",
+                    )
+                else:
+                    agent.status = "done"
+                    self.speech_queue.put(f"agent {agent.name}", summary, agent_id=agent.id)
 
         except Exception as e:  # noqa: BLE001
             agent.status = "error"
@@ -417,8 +463,8 @@ class AgentManager:
                     on_done(agent.id)
                 except Exception:  # noqa: BLE001
                     pass
-            # Only clean up worktree if no PR pending.
-            if agent.status != "pr_pending" and agent.worktree_path is not None:
+            # Keep worktree alive if we're waiting for user input or a PR decision.
+            if agent.status not in ("pr_pending", "needs_input") and agent.worktree_path is not None:
                 cleanup_worktree(agent.base_cwd, agent.worktree_path)
 
         # Process queued follow-up tasks.
@@ -476,6 +522,34 @@ class AgentManager:
         if agent.worktree_path is not None:
             cleanup_worktree(agent.base_cwd, agent.worktree_path)
         return pr_url
+
+    def handle_agent_question(
+        self,
+        agent_id: str,
+        user_response: str,
+        *,
+        on_event: Any | None = None,
+        on_done: Any | None = None,
+    ) -> None:
+        """Forward the user's answer to an agent waiting for input.
+
+        The agent's session context is preserved (via ``--resume``), so it
+        remembers its task.  We prepend the user's answer and ask it to
+        continue.
+        """
+        with self._lock:
+            agent = self.agents.get(agent_id)
+        if agent is None or agent.status != "needs_input":
+            return
+        question = agent.pending_question or "your question"
+        agent.pending_question = None
+        message = (
+            f"The user answered your question.\n"
+            f"Question: {question}\n"
+            f"Answer: {user_response}\n\n"
+            f"Continue your task using this information."
+        )
+        self.send_to_agent(agent, message, on_event=on_event, on_done=on_done)
 
     def resolve_agent_ref(self, ref: str) -> AgentInstance | None:
         """Find an agent by name or number (e.g. "2" → sub-2, "researcher" → name match)."""
