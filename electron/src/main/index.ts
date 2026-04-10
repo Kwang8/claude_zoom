@@ -155,7 +155,7 @@ async function createWindow() {
 
   // Open external URLs in the system browser
   ipcMain.on("open-external", (_event, url: string) => {
-    if (typeof url === "string" && url.startsWith("https://github.com/")) {
+    if (typeof url === "string" && url.startsWith("https://")) {
       shell.openExternal(url);
     }
   });
