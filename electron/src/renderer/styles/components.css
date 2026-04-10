@@ -344,3 +344,36 @@
 .statusbar-dot.disconnected {
   background: var(--accent-red);
 }
+
+.statusbar-recording {
+  border-top-color: var(--accent-magenta);
+  box-shadow: 0 -1px 8px rgba(224, 64, 160, 0.25);
+  transition: box-shadow 0.15s ease, border-top-color 0.15s ease;
+}
+
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-magenta);
+  animation: recording-blink 1.2s ease-in-out infinite;
+}
+
+.recording-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-magenta);
+  flex-shrink: 0;
+  animation: recording-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(224, 64, 160, 0.5); }
+  50% { transform: scale(1.35); box-shadow: 0 0 0 4px rgba(224, 64, 160, 0); }
+}
+
+@keyframes recording-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}

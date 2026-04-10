@@ -1,30 +1,34 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityTicker } from "./components/ActivityTicker";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TranscriptView } from "./components/TranscriptView";
 import { useAppState } from "./hooks/useAppState";
-import { useWebSocket } from "./hooks/useWebSocket";
+import { useIPC } from "./hooks/useIPC";
 import type { ClientMessage } from "./types/messages";
 
 export function App() {
   const { state, handleMessage } = useAppState();
-  const { send, connected } = useWebSocket(handleMessage);
+  const { send, connected } = useIPC(handleMessage);
+  const [isRecording, setIsRecording] = useState(false);
 
   // Keyboard shortcuts
   useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      // Ignore if typing in an input
-      if (
+    function isInputFocused(e: KeyboardEvent) {
+      return (
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
+      );
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (isInputFocused(e)) return;
 
       if (e.code === "Space") {
         e.preventDefault();
+        if (e.repeat) return;
         console.log("[app] space pressed, sending mic_start");
+        setIsRecording(true);
         send({ type: "mic_start" });
       } else if (e.code === "Escape") {
         e.preventDefault();
@@ -35,8 +39,22 @@ export function App() {
       }
     }
 
+    function onKeyUp(e: KeyboardEvent) {
+      if (isInputFocused(e)) return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        console.log("[app] space released, sending mic_stop");
+        setIsRecording(false);
+        send({ type: "mic_stop" });
+      }
+    }
+
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, [send]);
 
   const handleDeleteAgent = useCallback(
@@ -65,6 +83,7 @@ export function App() {
         progress={state.progress}
         action={state.action}
         connected={connected}
+        isRecording={isRecording}
       />
     </div>
   );

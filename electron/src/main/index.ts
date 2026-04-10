@@ -1,27 +1,12 @@
-import { app, BrowserWindow, globalShortcut } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import path from "path";
-import { PythonBridge } from "./python-bridge";
+import { ClaudeSession } from "./claude-session";
+import { ChatEngine } from "./chat-engine";
 
 let mainWindow: BrowserWindow | null = null;
-let pythonBridge: PythonBridge | null = null;
-
-const PORT = 8765;
+let engine: ChatEngine | null = null;
 
 async function createWindow() {
-  // Start the Python WebSocket server
-  pythonBridge = new PythonBridge({
-    port: PORT,
-    host: "localhost",
-    permissionMode: "acceptEdits",
-  });
-
-  try {
-    await pythonBridge.start();
-    console.log("[main] Python server started");
-  } catch (err) {
-    console.error("[main] Failed to start Python server:", err);
-  }
-
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -32,7 +17,7 @@ async function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      // preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 
@@ -45,11 +30,68 @@ async function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   }
 
-  // Pass the WebSocket URL to the renderer via the window title
-  // (preload script can also be used for this)
-  mainWindow.webContents.on("did-finish-load", () => {
-    mainWindow?.webContents.send("ws-url", `ws://localhost:${PORT}`);
+  // Create the chat engine
+  const session = new ClaudeSession({
+    model: "opus",
+    permissionMode: "acceptEdits",
+    tools: "",
   });
+
+  engine = new ChatEngine(session, {
+    onEmit: (msg) => {
+      try {
+        mainWindow?.webContents.send("engine-event", msg);
+      } catch {}
+    },
+  });
+
+  // Handle commands from the renderer
+  ipcMain.on("engine-command", (_event, msg: Record<string, any>) => {
+    if (!engine) return;
+    const msgType = msg.type || "";
+    switch (msgType) {
+      case "mic_start":
+        engine.micStart();
+        break;
+      case "mic_stop":
+        engine.micStop();
+        break;
+      case "cancel_turn":
+        engine.cancelTurn();
+        break;
+      case "send_text":
+        engine.sendText(msg.text || "");
+        break;
+      case "pr_decision":
+        engine.prDecision(msg.agent_id || "", msg.approved ?? false);
+        break;
+      case "agent_answer":
+        engine.agentAnswer(msg.agent_id || "", msg.text || "");
+        break;
+      case "kill_agent":
+        engine.killAgent(msg.agent_id || "");
+        break;
+      case "attach_image":
+        engine.attachImage(msg.path || "");
+        break;
+      case "clear_images":
+        engine.clearImages();
+        break;
+      case "quit":
+        engine.stop();
+        app.quit();
+        break;
+    }
+  });
+
+  // When renderer is ready, replay state and start engine
+  mainWindow.webContents.on("did-finish-load", () => {
+    engine?.replayState();
+  });
+
+  // Start the engine
+  await engine.start();
+  console.log("[main] chat engine started");
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -59,12 +101,12 @@ async function createWindow() {
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {
-  pythonBridge?.stop();
+  engine?.stop();
   app.quit();
 });
 
 app.on("before-quit", () => {
-  pythonBridge?.stop();
+  engine?.stop();
 });
 
 app.on("activate", () => {
