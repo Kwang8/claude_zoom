@@ -6,7 +6,8 @@ interface Props {
   messages: TranscriptMessage[];
   selectedAgent: AgentInfo | null;
   onBackToMain: () => void;
-  githubRepo: string | null;
+  githubRepo?: string | null;
+  title?: string;
 }
 
 type TranscriptItem =
@@ -59,7 +60,7 @@ function groupTranscript(messages: TranscriptMessage[]): TranscriptItem[] {
   return grouped;
 }
 
-export function TranscriptView({ messages, selectedAgent, onBackToMain, githubRepo }: Props) {
+export function TranscriptView({ messages, selectedAgent, onBackToMain, githubRepo, title }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
   const [expandedStacks, setExpandedStacks] = useState<Record<string, boolean>>({});
   const transcriptItems = useMemo(() => groupTranscript(messages), [messages]);
@@ -75,7 +76,7 @@ export function TranscriptView({ messages, selectedAgent, onBackToMain, githubRe
   return (
     <div className="transcript">
       <div className="transcript-toolbar">
-        {selectedAgent ? (
+        {selectedAgent || title ? (
           <>
             <button
               type="button"
@@ -88,11 +89,11 @@ export function TranscriptView({ messages, selectedAgent, onBackToMain, githubRe
                 onBackToMain();
               }}
             >
-              main chat
+              {selectedAgent ? "main chat" : "work log"}
             </button>
             <div className="transcript-title-group">
-              <div className="transcript-title">{selectedAgent.name}</div>
-              <div className="transcript-subtitle">{selectedAgent.task}</div>
+              <div className="transcript-title">{selectedAgent ? selectedAgent.name : title}</div>
+              {selectedAgent && <div className="transcript-subtitle">{selectedAgent.task}</div>}
             </div>
           </>
         ) : (
@@ -103,7 +104,7 @@ export function TranscriptView({ messages, selectedAgent, onBackToMain, githubRe
       </div>
       {transcriptItems.map((item, i) => {
         if (item.type === "message") {
-          return <TranscriptEntry key={i} message={item.message} githubRepo={githubRepo} />;
+          return <TranscriptEntry key={i} message={item.message} githubRepo={githubRepo ?? null} />;
         }
 
         const latest = item.messages[item.messages.length - 1];
@@ -130,11 +131,11 @@ export function TranscriptView({ messages, selectedAgent, onBackToMain, githubRe
               {expanded &&
                 earlier.map((message, index) => (
                   <div key={`${item.key}-older-${index}`} className="tool-stack-layer">
-                    <TranscriptEntry message={message} githubRepo={githubRepo} />
+                    <TranscriptEntry message={message} githubRepo={githubRepo ?? null} />
                   </div>
                 ))}
               <div className="tool-stack-layer latest">
-                <TranscriptEntry message={latest} githubRepo={githubRepo} />
+                <TranscriptEntry message={latest} githubRepo={githubRepo ?? null} />
               </div>
             </div>
           </div>

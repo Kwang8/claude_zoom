@@ -6,11 +6,18 @@ const MAX_TRANSCRIPT_CHARS = 8_000;
 const MAX_FAST_PATH_WORDS = 30;
 
 const NARRATOR_SYSTEM_PROMPT = `\
-Rewrite the events below as ONE spoken sentence, under 25 words, first-person \
-past tense, describing the OUTCOME. No filler, no markdown, no code.
-USER ASKED: {user_message}
-EVENTS:
-{transcript}`;
+You rewrite an internal tool transcript into one short spoken status update.
+
+Return exactly one sentence, under 20 words.
+Focus on the concrete outcome, not the process.
+Prefer first-person past tense when natural.
+
+Rules:
+- Mention what changed, what was found, or what blocked progress
+- Do not mention tools, files, transcripts, or "events"
+- Do not use markdown, bullets, code, or quotes
+- Do not add filler such as "Okay", "Done", or "Here's what happened"
+- If the turn failed or was blocked, say that plainly in one sentence`;
 
 const MARKDOWN_RE = /[`*#>\[\]]|```/;
 
@@ -55,6 +62,78 @@ export function summarizeTurn(
   return sonnetSummarize(userMessage, events);
 }
 
+// ── Conversation compaction check ──
+
+const COMPACTION_SYSTEM_PROMPT = `\
+You are deciding if a voice conversation has reached a clear stopping point — a plan \
+was agreed, a question was answered, or work was delegated.
+
+Respond with EXACTLY one line of JSON, no other text:
+{"compact":true,"summary":"one-line title of what was discussed/decided"}
+or
+{"compact":false}
+
+Rules:
+- compact=true if: a clear plan was stated, work was delegated to agents, a question \
+was fully answered, or the user acknowledged completion.
+- compact=false if: the user asked something the assistant hasn't answered yet, the \
+conversation is mid-negotiation, or the response invited further input.
+- Summary should be under 12 words, past tense, no markdown.`;
+
+export interface CompactionResult {
+  shouldCompact: boolean;
+  summary: string;
+}
+
+export function checkConversationComplete(
+  messages: Record<string, any>[]
+): Promise<CompactionResult> {
+  let transcript = messages
+    .filter((m) => m.role && m.text)
+    .map((m) => `${m.role}: ${m.text}`)
+    .join("\n");
+
+  if (!transcript.trim()) {
+    return Promise.resolve({ shouldCompact: true, summary: "Empty conversation" });
+  }
+  if (transcript.length > MAX_TRANSCRIPT_CHARS) {
+    transcript = transcript.slice(-MAX_TRANSCRIPT_CHARS);
+  }
+
+  return new Promise((resolve) => {
+    const proc = execFile(
+      "claude",
+      [
+        "-p",
+        "--output-format", "json",
+        "--model", MODEL,
+        "--system-prompt", COMPACTION_SYSTEM_PROMPT,
+      ],
+      { timeout: 15_000 },
+      (err, stdout) => {
+        if (err) {
+          // On failure, don't compact — try again next turn
+          resolve({ shouldCompact: false, summary: "" });
+          return;
+        }
+        try {
+          const envelope = JSON.parse(stdout);
+          const text = (envelope.result || "").trim();
+          const result = JSON.parse(text);
+          resolve({
+            shouldCompact: Boolean(result.compact),
+            summary: result.summary || "Conversation",
+          });
+        } catch {
+          resolve({ shouldCompact: false, summary: "" });
+        }
+      }
+    );
+    proc.stdin?.write(transcript);
+    proc.stdin?.end();
+  });
+}
+
 function sonnetSummarize(
   userMessage: string,
   events: Record<string, any>[]
@@ -65,9 +144,10 @@ function sonnetSummarize(
     transcript = transcript.slice(0, MAX_TRANSCRIPT_CHARS) + "\n...(truncated)";
   }
 
-  const systemPrompt = NARRATOR_SYSTEM_PROMPT
-    .replace("{user_message}", userMessage || "(silent)")
-    .replace("{transcript}", transcript);
+  const prompt =
+    `USER REQUEST:\n${userMessage || "(silent)"}\n\n` +
+    `TURN TRANSCRIPT:\n${transcript}\n\n` +
+    "Summarize the outcome for speech.";
 
   return new Promise((resolve, reject) => {
     const proc = execFile(
@@ -76,7 +156,7 @@ function sonnetSummarize(
         "-p",
         "--output-format", "json",
         "--model", MODEL,
-        "--system-prompt", systemPrompt,
+        "--system-prompt", NARRATOR_SYSTEM_PROMPT,
       ],
       { timeout: 30_000 },
       (err, stdout, stderr) => {
@@ -96,7 +176,7 @@ function sonnetSummarize(
         }
       }
     );
-    proc.stdin?.write("Summarize.");
+    proc.stdin?.write(prompt);
     proc.stdin?.end();
   });
 }

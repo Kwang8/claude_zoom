@@ -311,12 +311,31 @@ function extractQuestion(events: Record<string, any>[]): string | null {
   return null;
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function rewriteTaskPathsForWorktree(
+  task: string,
+  baseCwd: string,
+  worktreePath: string | null
+): string {
+  if (!worktreePath || !task.includes(baseCwd)) return task;
+  return task.replace(new RegExp(escapeRegExp(baseCwd), "g"), worktreePath);
+}
+
 // ── Agent instance ──
 
 const SUB_AGENT_SYSTEM_PROMPT = `\
 You are a sub-agent given one focused task. Complete it and state the outcome \
 in 1-2 sentences. Do not narrate your tool calls. Just do the work and report \
 the result.
+
+You may be running inside an isolated git worktree that mirrors the main \
+project. Treat your current working directory as the project root for your \
+task. If the task mentions absolute paths from the main checkout, use the \
+equivalent paths in your current workspace instead of asking for access to the \
+parent checkout.
 
 Interpret the assigned task as work for you to perform directly. If the task \
 mentions your own name or says things like "ask Argus...", "tell Argus...", \
@@ -406,6 +425,7 @@ export class AgentManager {
     const auth = opts.auth ?? "oauth";
     const repo = opts.repo ?? null;
     let session: ClaudeSession | RemoteClaudeSession;
+    let task = opts.task;
 
     if (remote) {
       session = new RemoteClaudeSession({
@@ -421,6 +441,7 @@ export class AgentManager {
         try {
           worktreePath = setupWorktree(opts.baseCwd, agentId);
           cwd = worktreePath;
+          task = rewriteTaskPathsForWorktree(task, opts.baseCwd, worktreePath);
         } catch {}
       }
 
@@ -438,7 +459,7 @@ export class AgentManager {
       session,
       worktreePath,
       baseCwd: opts.baseCwd,
-      task: opts.task,
+      task,
       remote,
       repo,
       auth,
@@ -613,11 +634,16 @@ export class AgentManager {
     onEvent?: OnAgentEvent,
     onDone?: OnAgentDone
   ): void {
+    const rewrittenMessage = rewriteTaskPathsForWorktree(
+      message,
+      agent.baseCwd,
+      agent.worktreePath
+    );
     if (agent.status === "working") {
-      agent.taskQueue.push(message);
+      agent.taskQueue.push(rewrittenMessage);
       return;
     }
-    agent.task = message;
+    agent.task = rewrittenMessage;
     agent.status = "working";
     agent.events = [];
 

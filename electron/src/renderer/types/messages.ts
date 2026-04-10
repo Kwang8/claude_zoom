@@ -28,6 +28,20 @@ export interface TranscriptMessage {
   agent_id?: string;
   kind?: "tool_use";
   timestamp: string;
+  conversation_id?: string;
+}
+
+export type ConversationStatus = "active" | "compacted";
+
+export interface ConversationGroup {
+  id: string;
+  status: ConversationStatus;
+  summary: string | null;
+  startTimestamp: string;
+  endTimestamp: string | null;
+  messageStartIndex: number;
+  messageEndIndex: number;
+  spawnedAgentIds: string[];
 }
 
 export interface AgentInfo {
@@ -37,6 +51,7 @@ export interface AgentInfo {
   task: string;
   status: string;
   ticker?: string;
+  started_at?: number;
 }
 
 export type ServerMessage =
@@ -65,4 +80,7 @@ export type ServerMessage =
   | { type: "session_restored"; agents: AgentInfo[]; message: string }
   | { type: "progress"; text: string }
   | { type: "action"; text: string }
-  | { type: "repo_context"; repo: string };
+  | { type: "repo_context"; repo: string }
+  | { type: "conversation_start"; conversation_id: string; timestamp: string }
+  | { type: "conversation_compacted"; conversation_id: string; summary: string; timestamp: string }
+  | { type: "conversation_agent_spawned"; conversation_id: string; agent_id: string };

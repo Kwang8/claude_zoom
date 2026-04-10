@@ -2,6 +2,7 @@ import { useCallback, useReducer } from "react";
 import type {
   AgentInfo,
   AppState,
+  ConversationGroup,
   ServerMessage,
   TranscriptMessage,
 } from "../types/messages";
@@ -11,6 +12,7 @@ export interface State {
   narration: string;
   transcript: TranscriptMessage[];
   agents: AgentInfo[];
+  conversations: ConversationGroup[];
   ticker: string;
   progress: string;
   action: string;
@@ -24,6 +26,7 @@ const initialState: State = {
   narration: "",
   transcript: [],
   agents: [],
+  conversations: [],
   ticker: "",
   progress: "ready",
   action: "connecting...",
@@ -51,27 +54,35 @@ function reducer(state: State, action: Action): State {
         narration: msg.narration || "",
       };
 
-    case "transcript_message":
-      return {
-        ...state,
-        transcript: [
-          ...state.transcript,
-          {
-            role: msg.role,
-            text: msg.text,
-            agent_name: msg.agent_name,
-            agent_id: msg.agent_id,
-            kind: msg.kind,
-            timestamp: msg.timestamp,
-          },
-        ],
+    case "transcript_message": {
+      const newMessage: TranscriptMessage = {
+        role: msg.role,
+        text: msg.text,
+        agent_name: msg.agent_name,
+        agent_id: msg.agent_id,
+        kind: msg.kind,
+        timestamp: msg.timestamp,
+        conversation_id: (msg as any).conversation_id,
       };
+      const newTranscript = [...state.transcript, newMessage];
+      const convId = newMessage.conversation_id;
+      let newConversations = state.conversations;
+      if (convId) {
+        newConversations = state.conversations.map((c) =>
+          c.id === convId
+            ? { ...c, messageEndIndex: newTranscript.length - 1 }
+            : c
+        );
+      }
+      return { ...state, transcript: newTranscript, conversations: newConversations };
+    }
 
     case "ticker_update":
       return { ...state, ticker: msg.activity };
 
     case "agent_spawned": {
       const filtered = state.agents.filter((a) => a.agent_id !== msg.agent_id);
+      const status = msg.status || "working";
       return {
         ...state,
         agents: [
@@ -81,7 +92,8 @@ function reducer(state: State, action: Action): State {
             name: msg.name,
             number: msg.number,
             task: msg.task,
-            status: msg.status || "working",
+            status,
+            started_at: status === "working" ? Date.now() : undefined,
           },
         ],
       };
@@ -92,7 +104,17 @@ function reducer(state: State, action: Action): State {
         ...state,
         agents: state.agents.map((a) =>
           a.agent_id === msg.agent_id
-            ? { ...a, status: msg.status, ticker: msg.ticker ?? a.ticker }
+            ? {
+                ...a,
+                status: msg.status,
+                ticker: msg.ticker ?? a.ticker,
+                started_at:
+                  msg.status === "working"
+                    ? a.status === "working"
+                      ? a.started_at
+                      : Date.now()
+                    : undefined,
+              }
             : a
         ),
       };
@@ -118,6 +140,40 @@ function reducer(state: State, action: Action): State {
 
     case "repo_context":
       return { ...state, githubRepo: msg.repo };
+
+    case "conversation_start": {
+      const newConv: ConversationGroup = {
+        id: msg.conversation_id,
+        status: "active",
+        summary: null,
+        startTimestamp: msg.timestamp,
+        endTimestamp: null,
+        messageStartIndex: state.transcript.length,
+        messageEndIndex: state.transcript.length,
+        spawnedAgentIds: [],
+      };
+      return { ...state, conversations: [...state.conversations, newConv] };
+    }
+
+    case "conversation_compacted":
+      return {
+        ...state,
+        conversations: state.conversations.map((c) =>
+          c.id === msg.conversation_id
+            ? { ...c, status: "compacted" as const, summary: msg.summary, endTimestamp: msg.timestamp }
+            : c
+        ),
+      };
+
+    case "conversation_agent_spawned":
+      return {
+        ...state,
+        conversations: state.conversations.map((c) =>
+          c.id === msg.conversation_id
+            ? { ...c, spawnedAgentIds: [...c.spawnedAgentIds, msg.agent_id] }
+            : c
+        ),
+      };
 
     default:
       return state;

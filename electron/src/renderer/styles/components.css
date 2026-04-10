@@ -44,6 +44,15 @@
   align-items: center;
   gap: 8px;
   border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+
+.avatar-panel.selected {
+  background: color-mix(in srgb, var(--bg-secondary) 70%, var(--accent-cyan) 30%);
+}
+
+.avatar-panel.clickable:hover {
+  background: var(--bg-card-hover, rgba(255, 255, 255, 0.05));
 }
 
 .avatar-orb {
@@ -197,6 +206,13 @@
   font-size: 13px;
   font-weight: 600;
   flex: 1;
+}
+
+.agent-timer {
+  font-size: 11px;
+  color: var(--accent-cyan);
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-variant-numeric: tabular-nums;
 }
 
 .agent-delete {
@@ -536,4 +552,143 @@
 @keyframes recording-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
+}
+
+/* ── Work Log ── */
+
+.worklog {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.worklog-toolbar {
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.worklog-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.worklog-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.worklog-preamble {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.worklog-entry {
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  animation: fade-in 0.2s ease-out;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--bg-card);
+}
+
+.worklog-entry.compacted {
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.worklog-entry.compacted:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent-cyan);
+}
+
+.worklog-entry.active {
+  border-color: var(--accent-cyan);
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--accent-cyan) 12%);
+}
+
+.worklog-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.worklog-entry-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: "SF Mono", "Fira Code", monospace;
+  flex-shrink: 0;
+}
+
+.worklog-entry-summary {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.worklog-entry-live-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-cyan);
+  background: color-mix(in srgb, transparent 80%, var(--accent-cyan) 20%);
+  padding: 2px 6px;
+  border-radius: 999px;
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+
+.worklog-entry-agents {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.worklog-agent-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.worklog-agent-badge.working {
+  color: var(--accent-cyan);
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent-cyan) 50%);
+}
+
+.worklog-agent-badge.done {
+  color: var(--accent-green);
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent-green) 50%);
+}
+
+.worklog-agent-badge.error {
+  color: var(--accent-red);
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent-red) 50%);
+}
+
+.worklog-agent-badge.needs_input {
+  color: var(--accent-purple);
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent-purple) 50%);
+}
+
+.worklog-agent-badge.pr_pending {
+  color: var(--accent-yellow);
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent-yellow) 50%);
+}
+
+.worklog-entry-transcript {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
