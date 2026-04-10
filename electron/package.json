@@ -4,11 +4,10 @@
   "description": "Voice-first multi-agent Claude Code interface",
   "main": "dist/main/index.js",
   "scripts": {
-    "dev": "concurrently \"vite\" \"tsc -p tsconfig.main.json --watch\" \"electron .\"",
+    "dev": "tsc -p tsconfig.main.json && concurrently -k \"vite\" \"electron .\"",
     "build": "vite build && tsc -p tsconfig.main.json",
     "start": "npm run build && electron .",
-    "dev:renderer": "vite",
-    "dev:main": "tsc -p tsconfig.main.json --watch"
+    "dev:renderer": "vite"
   },
   "dependencies": {
     "react": "^19.0.0",

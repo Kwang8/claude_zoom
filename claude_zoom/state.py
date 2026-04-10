@@ -44,6 +44,7 @@ class AppState:
     main_cwd: str | None = None
     agents: list[AgentState] = field(default_factory=list)
     agent_counter: int = 0
+    messages: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _state_path(cwd: str) -> str:
@@ -60,6 +61,7 @@ def save_state(state: AppState, cwd: str) -> None:
         "main_cwd": state.main_cwd,
         "agent_counter": state.agent_counter,
         "agents": [asdict(a) for a in state.agents],
+        "messages": state.messages,
     }
     try:
         with open(path, "w") as f:
@@ -84,6 +86,7 @@ def load_state(cwd: str) -> AppState | None:
             main_cwd=data.get("main_cwd"),
             agents=agents,
             agent_counter=data.get("agent_counter", 0),
+            messages=data.get("messages", []),
         )
         log.debug("state loaded from %s", path)
         return state

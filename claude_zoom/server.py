@@ -129,6 +129,9 @@ class ChatEngine:
         self._cancel_recording = threading.Event()
         self._main_idle = threading.Event()
 
+        # Transcript log (persisted across restarts)
+        self._transcript_log: list[dict[str, Any]] = []
+
         # Routing state
         self._awaiting_pr_agent_id: str | None = None
         self._awaiting_question_agent_id: str | None = None
@@ -151,13 +154,15 @@ class ChatEngine:
     def _send_transcript(
         self, role: str, text: str, agent_name: str = ""
     ) -> None:
-        self._send(
-            "transcript_message",
-            role=role,
-            text=text,
-            agent_name=agent_name,
-            timestamp=datetime.now().strftime("%H:%M"),
-        )
+        msg = {
+            "type": "transcript_message",
+            "role": role,
+            "text": text,
+            "agent_name": agent_name,
+            "timestamp": datetime.now().strftime("%H:%M"),
+        }
+        self._transcript_log.append(msg)
+        self._emit(msg)
 
     def _send_ticker(self, activity: str) -> None:
         self._send("ticker_update", activity=activity)
@@ -261,6 +266,15 @@ class ChatEngine:
     # ── Main chat loop ───────────────────────────────────────────────────
 
     def _run_chat_loop(self) -> None:
+        try:
+            self._run_chat_loop_inner()
+        except Exception as e:  # noqa: BLE001
+            log.error("chat loop crashed: %s", e, exc_info=True)
+            self._send("action", text=f"chat loop error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _run_chat_loop_inner(self) -> None:
         from .voice import Recorder, play_sound
 
         # Try restore.
@@ -697,6 +711,7 @@ class ChatEngine:
             main_cwd=cwd,
             agents=agent_states,
             agent_counter=self._agent_manager._counter,
+            messages=self._transcript_log[-200:],
         )
         save_state(state, cwd)
 
@@ -710,6 +725,12 @@ class ChatEngine:
 
         self.session.session_id = state.main_session_id
         self._agent_manager._counter = state.agent_counter
+
+        # Replay persisted transcript messages to the client.
+        if state.messages:
+            self._transcript_log = list(state.messages)
+            for msg in state.messages:
+                self._emit(msg)
 
         for a in state.agents:
             session = ClaudeSession(
@@ -739,6 +760,11 @@ class ChatEngine:
                 task=a.task,
                 status=a.status,
             )
+            # Restore routing state for agents awaiting a response.
+            if a.status == "needs_input" and self._awaiting_question_agent_id is None:
+                self._awaiting_question_agent_id = a.id
+            elif a.status == "pr_pending" and self._awaiting_pr_agent_id is None:
+                self._awaiting_pr_agent_id = a.id
 
         n = len(state.agents)
         names = ", ".join(a.name for a in state.agents)
@@ -836,6 +862,6 @@ async def run_server(
         await _handle_client(websocket, engine)
 
     log.info("starting WebSocket server on %s:%d", host, port)
-    async with websockets.serve(handler, host, port):
+    async with websockets.serve(handler, host, port, origins=None):
         print(f"claude-zoom server running on ws://{host}:{port}")
         await asyncio.Future()  # run forever
