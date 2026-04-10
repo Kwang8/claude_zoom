@@ -640,24 +640,41 @@ export class ChatEngine {
   // ── Tech Lead integration ──
 
   private _delegateToTechLead(task: string): void {
+    console.log("[engine] delegating to TL:", task.slice(0, 120));
     this._sendAction("tech lead is planning...");
     this._sendTicker("tech lead");
 
     this._techLead.delegateTask(task).then((response) => {
+      console.log("[engine] TL responded:", JSON.stringify({
+        spawns: response.spawns.length,
+        escalation: !!response.escalation,
+        report: !!response.report,
+        answer: !!response.answer,
+        fixes: response.fixes.length,
+      }));
       this._sendTicker("");
       for (const [name, agentTask] of response.spawns) {
+        console.log("[engine] TL spawning:", name, agentTask.slice(0, 80));
         try { this._spawnSub(name, agentTask); } catch (e) {
           console.error(`[tl] spawn failed for ${name}:`, e);
         }
       }
       if (response.escalation) {
+        console.log("[engine] TL escalating:", response.escalation.slice(0, 80));
         this._awaitingTLEscalation = response.escalation;
         this._speechQueue.put("tech lead", response.escalation, {
           requiresResponse: true, questionType: "agent_question",
         });
       }
       if (response.report) {
+        console.log("[engine] TL report:", response.report.slice(0, 80));
         this._speakTLReport(response.report);
+      }
+      if (!response.spawns.length && !response.escalation && !response.report) {
+        console.warn("[engine] TL returned no actionable output — speaking raw response");
+        const { extractFinalText } = require("./narrator");
+        // Nothing structured — TL might have just spoken plainly
+        this._speechQueue.put("tech lead", "The tech lead is working on it.");
       }
     }).catch((e) => {
       console.error("[tl] delegate error:", e);

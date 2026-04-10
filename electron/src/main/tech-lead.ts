@@ -203,9 +203,25 @@ export class TechLead {
   }
 
   private async _collect(prompt: string): Promise<Record<string, any>[]> {
+    console.log("[tl] sending prompt to TL session...", prompt.slice(0, 120));
     const events: Record<string, any>[] = [];
-    for await (const event of this._session.send(prompt)) {
-      events.push(event);
+    try {
+      for await (const event of this._session.send(prompt)) {
+        events.push(event);
+        if (event.type === "assistant") {
+          const text = (event.message?.content || [])
+            .filter((c: any) => c.type === "text")
+            .map((c: any) => c.text)
+            .join("");
+          if (text) console.log("[tl] assistant text:", text.slice(0, 200));
+        } else if (event.type === "system") {
+          console.log("[tl] system event:", event.subtype || "unknown");
+        }
+      }
+      console.log("[tl] session.send() finished, got", events.length, "events");
+    } catch (e) {
+      console.error("[tl] session.send() threw:", e);
+      throw e;
     }
     return events;
   }
