@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
+import fs from "fs";
 import path from "path";
 import { ClaudeSession } from "./claude-session";
 import { ChatEngine } from "./chat-engine";
@@ -6,7 +7,42 @@ import { ChatEngine } from "./chat-engine";
 let mainWindow: BrowserWindow | null = null;
 let engine: ChatEngine | null = null;
 
+function resolveTargetCwd(argv: string[], env: NodeJS.ProcessEnv): string | null {
+  const envCwd = env.CLAUDE_ZOOM_CWD?.trim();
+  let raw = envCwd || "";
+  if (!raw) {
+    for (let i = 0; i < argv.length; i += 1) {
+      const arg = argv[i];
+      if (arg === "--cwd") {
+        raw = argv[i + 1] || "";
+        break;
+      }
+      if (arg.startsWith("--cwd=")) {
+        raw = arg.slice("--cwd=".length);
+        break;
+      }
+    }
+  }
+
+  if (!raw) return null;
+
+  const resolved = path.resolve(raw);
+  try {
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+      return resolved;
+    }
+  } catch {}
+
+  if (envCwd) {
+    console.warn(`[main] ignoring invalid CLAUDE_ZOOM_CWD: ${resolved}`);
+  } else {
+    console.warn(`[main] ignoring invalid --cwd target: ${resolved}`);
+  }
+  return null;
+}
+
 async function createWindow() {
+  const targetCwd = resolveTargetCwd(process.argv.slice(1), process.env);
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -32,6 +68,7 @@ async function createWindow() {
 
   // Create the chat engine
   const session = new ClaudeSession({
+    cwd: targetCwd,
     model: "opus",
     permissionMode: "acceptEdits",
     tools: "",
