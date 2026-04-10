@@ -789,6 +789,9 @@ class ChatApp(App):
         self.session = session
         self._stop_flag = threading.Event()
         self._mic_event = threading.Event()
+        # Set by escape during the recording phase so the worker can abort
+        # transcription instead of sending the captured audio to Claude.
+        self._cancel_recording = threading.Event()
         # Set when the main input loop is idle (waiting for mic press).
         # The speech consumer only plays sub-agent summaries when this is set.
         self._main_idle = threading.Event()
@@ -828,6 +831,10 @@ class ChatApp(App):
 
     def action_cancel_turn(self) -> None:
         self.session.cancel()
+        # Unblock _wait_for_mic_press if we're stuck in the recording phase,
+        # and signal the worker to discard the recording rather than send it.
+        self._cancel_recording.set()
+        self._mic_event.set()
         self.query_one(StatusBar).action = "cancel sent"
 
     async def action_quit(self) -> None:  # type: ignore[override]
@@ -869,6 +876,7 @@ class ChatApp(App):
 
             # ── LISTEN ──
             turn += 1
+            self._cancel_recording.clear()
             self._set_state("listening", "")
             self._set_progress(f"turn {turn}")
             self._set_action("recording — press SPACE to send")
@@ -889,6 +897,14 @@ class ChatApp(App):
             if not self._wait_for_mic_press():
                 recorder.close()
                 break
+
+            # Escape was pressed during recording — discard audio, do not send.
+            if self._cancel_recording.is_set():
+                self._cancel_recording.clear()
+                recorder.close()
+                self._set_state("idle", "")
+                self._set_action("cancelled")
+                continue
 
             self._set_state("thinking", "")
             self._set_action("transcribing...")
