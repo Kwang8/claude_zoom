@@ -200,7 +200,7 @@ export class ChatEngine {
       agent_id: agentId,
       kind,
       conversation_id: this._currentConvId || undefined,
-      timestamp: new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit" }),
+      timestamp: new Date().toLocaleTimeString("en-US", { hour12: true, hour: "numeric", minute: "2-digit" }),
     };
     this._transcriptLog.push(msg);
     if (this._currentConvId) {
@@ -333,7 +333,7 @@ export class ChatEngine {
     this._convMessages = [];
     this._compactionPending = false;
     const timestamp = new Date().toLocaleTimeString("en-US", {
-      hour12: false, hour: "2-digit", minute: "2-digit",
+      hour12: true, hour: "numeric", minute: "2-digit",
     });
     const data: ConversationData = {
       id, status: "active", summary: null,
@@ -357,7 +357,7 @@ export class ChatEngine {
 
       if (result.shouldCompact) {
         const timestamp = new Date().toLocaleTimeString("en-US", {
-          hour12: false, hour: "2-digit", minute: "2-digit",
+          hour12: true, hour: "numeric", minute: "2-digit",
         });
         const conv = this._convLog.find((c) => c.id === convId);
         if (conv) {
