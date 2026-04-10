@@ -66,11 +66,12 @@ function reducer(state: State, action: Action): State {
     case "ticker_update":
       return { ...state, ticker: msg.activity };
 
-    case "agent_spawned":
+    case "agent_spawned": {
+      const filtered = state.agents.filter((a) => a.agent_id !== msg.agent_id);
       return {
         ...state,
         agents: [
-          ...state.agents,
+          ...filtered,
           {
             agent_id: msg.agent_id,
             name: msg.name,
@@ -80,6 +81,7 @@ function reducer(state: State, action: Action): State {
           },
         ],
       };
+    }
 
     case "agent_status": {
       return {
