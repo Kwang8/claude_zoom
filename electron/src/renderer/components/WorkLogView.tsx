@@ -80,7 +80,11 @@ function ActiveConversation({
     <div className="worklog-entry active focused">
       <div className="worklog-entry-header">
         <span className="worklog-entry-time">{conversation.startTimestamp}</span>
-        <span className="worklog-entry-live-badge">live</span>
+        {conversation.status !== "active" && (
+          <span className={`worklog-status-badge ${(STATUS_LABELS[conversation.status] ?? STATUS_LABELS.active).className}`}>
+            {(STATUS_LABELS[conversation.status] ?? STATUS_LABELS.active).label}
+          </span>
+        )}
       </div>
       {messages.length > 0 && (
         <div className="worklog-entry-transcript">
@@ -96,7 +100,7 @@ const STATUS_LABELS: Record<string, { label: string; className: string }> = {
   needs_input: { label: "needs input", className: "status-needs-input" },
   pr_open: { label: "PR open", className: "status-pr-open" },
   completed: { label: "completed", className: "status-completed" },
-  active: { label: "live", className: "status-active" },
+  active: { label: "idle", className: "status-active" },
 };
 
 /** Derive a short summary from the first user message in a conversation. */
