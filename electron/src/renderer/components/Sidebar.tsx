@@ -1,6 +1,48 @@
+import { useEffect, useState } from "react";
 import type { AgentInfo, AppState } from "../types/messages";
 import { AgentCard } from "./AgentCard";
 import { AvatarPanel } from "./AvatarPanel";
+
+function fmt(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
+function UsagePanel() {
+  const [input, setInput] = useState(0);
+  const [output, setOutput] = useState(0);
+
+  useEffect(() => {
+    if (!window.claude) return;
+    window.claude.send({ type: "get_usage" });
+    const cleanup = window.claude.onEvent((msg) => {
+      if (msg.type === "usage_update") {
+        setInput(msg.input_tokens ?? 0);
+        setOutput(msg.output_tokens ?? 0);
+      }
+    });
+    return cleanup;
+  }, []);
+
+  return (
+    <div className="usage-panel">
+      <div className="agents-header">usage</div>
+      <div className="usage-stats">
+        <div className="usage-row">
+          <span className="usage-label">input</span>
+          <span className="usage-value">{fmt(input)}</span>
+        </div>
+        <div className="usage-row">
+          <span className="usage-label">output</span>
+          <span className="usage-value">{fmt(output)}</span>
+        </div>
+        <div className="usage-row usage-total">
+          <span className="usage-label">total</span>
+          <span className="usage-value">{fmt(input + output)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface Props {
   appState: AppState;
@@ -20,6 +62,7 @@ export function Sidebar({ appState, narration, agents, selectedAgentId, onSelect
         selected={selectedAgentId === null}
         onClick={() => onSelectAgent(null)}
       />
+      <UsagePanel />
       {agents.length > 0 && (
         <>
           <div className="agents-header">sub agents</div>

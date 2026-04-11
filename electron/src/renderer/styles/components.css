@@ -147,6 +147,42 @@
   letter-spacing: 1px;
 }
 
+/* ── Usage Panel ── */
+
+.usage-panel {
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-stats {
+  padding: 0 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.usage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.usage-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.usage-value {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-total .usage-label,
+.usage-total .usage-value {
+  color: var(--accent-cyan);
+}
+
 .agents-list {
   padding: 0 8px 8px;
   display: flex;
