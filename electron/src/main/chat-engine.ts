@@ -521,19 +521,8 @@ export class ChatEngine {
   // ── Main chat loop ──
 
   private async _runChatLoop(): Promise<void> {
-    let introState: string | null | undefined;
-    if (this._resume) introState = this._restoreState();
-    let intro = introState;
-    if (intro === null) {
-      intro = "Hey! Press space to talk. You can spin off sub-agents and talk to them by name or number.";
-    }
-    if (intro) {
-      this._sendTranscript("claude", intro);
-    }
+    if (this._resume) this._restoreState();
     this._sendProgress("ready");
-    if (intro) {
-      await this._speak(intro);
-    }
     this._micEvent.clear();
 
     let turn = 0;
