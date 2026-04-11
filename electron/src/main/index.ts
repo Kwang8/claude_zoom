@@ -2,9 +2,22 @@ import { app, BrowserWindow, ipcMain, shell } from "electron";
 import fs from "fs";
 import path from "path";
 import { ConversationManager } from "./conversation-manager";
+import { setGlobalUsageCallback } from "./claude-session";
 
 let mainWindow: BrowserWindow | null = null;
 let conversationManager: ConversationManager | null = null;
+let totalInputTokens = 0;
+let totalOutputTokens = 0;
+
+setGlobalUsageCallback((input, output) => {
+  totalInputTokens += input;
+  totalOutputTokens += output;
+  mainWindow?.webContents.send("engine-event", {
+    type: "usage_update",
+    input_tokens: totalInputTokens,
+    output_tokens: totalOutputTokens,
+  });
+});
 const DEV_SERVER_URL = "http://localhost:5173";
 
 function findGitRoot(startDir: string): string | null {
@@ -109,6 +122,16 @@ async function createWindow() {
   ipcMain.on("engine-command", (_event, msg: Record<string, any>) => {
     if (!conversationManager) return;
     const msgType = msg.type || "";
+
+    // ── Usage query ──
+    if (msgType === "get_usage") {
+      mainWindow?.webContents.send("engine-event", {
+        type: "usage_update",
+        input_tokens: totalInputTokens,
+        output_tokens: totalOutputTokens,
+      });
+      return;
+    }
 
     // ── Conversation management commands ──
     if (msgType === "create_conversation") {

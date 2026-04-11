@@ -55,6 +55,19 @@ RULES:
 - When you receive [SYSTEM] status updates, include them in the ROUTE block \
   as context but do not speak about them unless the user asked.`;
 
+// ── Global Usage Tracking ──
+
+type UsageCallback = (inputTokens: number, outputTokens: number) => void;
+let _globalUsageCallback: UsageCallback | null = null;
+
+export function setGlobalUsageCallback(cb: UsageCallback): void {
+  _globalUsageCallback = cb;
+}
+
+export function reportUsage(inputTokens: number, outputTokens: number): void {
+  _globalUsageCallback?.(inputTokens, outputTokens);
+}
+
 // ── EM Route Parsing ──
 
 const EM_ROUTE_RE = /<ROUTE\s+target=["']([^"']+)["']>(.*?)<\/ROUTE>/is;
@@ -170,6 +183,9 @@ export class ClaudeSession {
           capturedInit = true;
         }
 
+        if (event.type === "result" && event.usage) {
+          reportUsage(event.usage.input_tokens || 0, event.usage.output_tokens || 0);
+        }
         yield event;
       }
 

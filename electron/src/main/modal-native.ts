@@ -1,3 +1,5 @@
+import { reportUsage } from "./claude-session";
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -156,6 +158,9 @@ export class NativeModalSession {
         capturedInit = true;
       }
 
+      if (event.type === "result" && event.usage) {
+        reportUsage(event.usage.input_tokens || 0, event.usage.output_tokens || 0);
+      }
       yielded.push(event);
       wake?.();
       wake = null;

@@ -13,7 +13,8 @@ export type ClientMessage =
   | { type: "create_conversation" }
   | { type: "switch_conversation"; conversation_id: string }
   | { type: "merge_pr" }
-  | { type: "quit" };
+  | { type: "quit" }
+  | { type: "get_usage" };
 
 // ── Server -> Client ──
 
@@ -97,4 +98,5 @@ export type ServerMessage =
   | { type: "conversation_agent_spawned"; conversation_id: string; agent_id: string }
   | { type: "conversation_created"; conversation_id: string; timestamp: string }
   | { type: "conversation_switched"; conversation_id: string }
-  | { type: "conversation_status"; conversation_id: string; status: ConversationStatus; detail?: string; pr_url?: string };
+  | { type: "conversation_status"; conversation_id: string; status: ConversationStatus; detail?: string; pr_url?: string }
+  | { type: "usage_update"; input_tokens: number; output_tokens: number };
