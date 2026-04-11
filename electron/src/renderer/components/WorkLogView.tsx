@@ -14,6 +14,13 @@ interface Props {
   onNewConversation: () => void;
 }
 
+function getMessagePreview(messages: TranscriptMessage[]): string {
+  const firstUser = messages.find((m) => m.role === "user");
+  if (!firstUser?.text) return "";
+  const text = firstUser.text.trim();
+  return text.length > 80 ? text.slice(0, 80) + "…" : text;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   working: "working",
   done: "done",
@@ -43,7 +50,9 @@ function CompactedEntry({
     <div className={`worklog-entry compacted${isExpanded ? " expanded" : ""}`}>
       <button className="worklog-entry-header" onClick={onToggle} type="button">
         <span className="worklog-entry-time">{conversation.startTimestamp}</span>
-        <span className="worklog-entry-summary">{conversation.summary}</span>
+        <span className="worklog-entry-summary">
+          {conversation.summary || getMessagePreview(messages)}
+        </span>
         <span className="worklog-expand-indicator">{isExpanded ? "▲" : "▼"}</span>
       </button>
       {spawnedAgents.length > 0 && (
@@ -93,13 +102,16 @@ function ActiveConversation({
 /** A live conversation that isn't focused — collapsed, clickable to switch. */
 function CollapsedLiveEntry({
   conversation,
+  messages,
   messageCount,
   onClick,
 }: {
   conversation: ConversationGroup;
+  messages: TranscriptMessage[];
   messageCount: number;
   onClick: () => void;
 }) {
+  const preview = getMessagePreview(messages);
   return (
     <button
       className="worklog-entry active collapsed"
@@ -116,6 +128,9 @@ function CollapsedLiveEntry({
         )}
         <span className="worklog-expand-indicator">▼</span>
       </div>
+      {preview && (
+        <div className="worklog-entry-summary">{preview}</div>
+      )}
     </button>
   );
 }
@@ -200,6 +215,7 @@ export function WorkLogView({
           <CollapsedLiveEntry
             key={conv.id}
             conversation={conv}
+            messages={messages}
             messageCount={messages.filter((m) => m.role !== "system").length}
             onClick={() => onSwitchConversation(conv.id)}
           />
