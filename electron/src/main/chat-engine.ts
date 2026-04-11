@@ -128,6 +128,7 @@ export class ChatEngine {
   private _recorder: RecorderBridge | null = null;
   private _remoteRepo: string | null;
   private _remoteAuth: string;
+  private _stateId: string | undefined;
 
   // Signals
   private _stopFlag = new Signal();
@@ -158,6 +159,7 @@ export class ChatEngine {
       resume?: boolean;
       remoteRepo?: string | null;
       remoteAuth?: string;
+      stateId?: string;
     }
   ) {
     this.session = session;
@@ -169,6 +171,7 @@ export class ChatEngine {
     this._techLead = new TechLead(session.cwd || ".");
     this._remoteRepo = opts.remoteRepo ?? null;
     this._remoteAuth = opts.remoteAuth ?? "oauth";
+    this._stateId = opts.stateId;
   }
 
   get githubRepo(): string | null {
@@ -1028,6 +1031,7 @@ export class ChatEngine {
 
   private _saveState(): void {
     const cwd = this.session.cwd || ".";
+    const stateId = this._stateId;
     const agentStates: AgentStateData[] = this._agentManager.allAgents.map((a) => ({
       id: a.id,
       name: a.name,
@@ -1054,7 +1058,7 @@ export class ChatEngine {
       current_conversation_id: this._currentConvId,
       tech_lead_session_id: this._techLead.sessionId,
     };
-    saveState(state, cwd);
+    saveState(state, cwd, stateId);
   }
 
   private _scheduleStateSave(): void {
@@ -1073,7 +1077,7 @@ export class ChatEngine {
 
   private _restoreState(): string | null | undefined {
     const cwd = this.session.cwd || ".";
-    const state = loadState(cwd);
+    const state = loadState(cwd, this._stateId);
     if (!state || !state.main_session_id) return null;
 
     this.session.sessionId = state.main_session_id;
