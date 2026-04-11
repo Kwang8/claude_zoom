@@ -587,9 +587,28 @@
 }
 
 .worklog-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 20px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border);
+}
+
+.worklog-new-btn {
+  background: none;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.worklog-new-btn:hover {
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
 }
 
 .worklog-title {
@@ -635,9 +654,54 @@
   border-color: var(--accent-cyan);
 }
 
-.worklog-entry.active {
+.worklog-entry.active.focused {
   border-color: var(--accent-cyan);
   background: color-mix(in srgb, var(--bg-card) 88%, var(--accent-cyan) 12%);
+}
+
+.worklog-entry.active.collapsed {
+  cursor: pointer;
+  border-color: color-mix(in srgb, var(--border) 60%, var(--accent-cyan) 40%);
+  background: var(--bg-card);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.worklog-entry.active.collapsed:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent-cyan);
+}
+
+.worklog-entry-msg-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.worklog-expand-indicator {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.worklog-entry.compacted .worklog-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.worklog-entry-inline-transcript {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
 
 .worklog-entry-header {
