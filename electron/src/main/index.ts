@@ -195,15 +195,21 @@ async function createWindow() {
   // When renderer is ready, replay state for all conversations and send repo context
   mainWindow.webContents.on("did-finish-load", () => {
     if (!conversationManager) return;
-    // Send conversation_created for each conversation before replaying messages
-    for (const conv of conversationManager.listConversations()) {
+    // Only send conversation_created + replay for the active conversation
+    const activeId = conversationManager.activeConversationId;
+    const activeEngine = conversationManager.getActiveConversation();
+    if (activeId && activeEngine) {
+      const convList = conversationManager.listConversations();
+      const activeConv = convList.find((c) => c.id === activeId);
       mainWindow?.webContents.send("engine-event", {
         type: "conversation_created",
-        conversation_id: conv.id,
-        timestamp: new Date(conv.createdAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
+        conversation_id: activeId,
+        timestamp: activeConv
+          ? new Date(activeConv.createdAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })
+          : new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
       });
+      activeEngine.replayState();
     }
-    conversationManager.replayStateAll();
     const repo = conversationManager.githubRepo;
     if (repo) {
       mainWindow?.webContents.send("engine-event", { type: "repo_context", repo });
