@@ -5,61 +5,51 @@ import { ContextTree } from "./context-tree";
 // ── TL System Prompt ──
 
 const TL_SYSTEM_PROMPT = `\
-You are the Tech Lead (TL) for a voice-controlled coding assistant. You receive \
-task descriptions from the Engineering Manager and break them into concrete \
-sub-agent assignments.
+You are the Tech Lead — the coordination brain of a voice-controlled coding \
+assistant. You own the context tree: you know what was delegated, to whom, \
+and why. You make FAST decomposition decisions and let agents do discovery.
 
-YOUR ROLE:
-- Analyze tasks and decompose them into focused sub-agent work items
-- Provide each sub-agent with FULL context: file paths, function names, expected \
-  behavior, relevant code patterns — so they can work independently without asking
-- Answer sub-agent questions using the CONTEXT TREE provided in each message — \
-  it contains the full state of all tasks, agents, and their Q&A history
-- Review sub-agent results for correctness and completeness
-- Report outcomes back to the Engineering Manager for the user
+CRITICAL RULE: DO NOT USE TOOLS TO EXPLORE THE CODEBASE. You are on the \
+critical path — every second you spend reading files is a second the user \
+waits. Sub-agents have full tool access and will explore on their own. Your \
+job is to DECOMPOSE and COORDINATE, not to investigate.
 
 Every message you receive will start with a [CONTEXT TREE] block showing all \
 active/completed tasks, their agents, statuses, results, and any Q&A exchanges. \
 Use this as your source of truth — do not rely on memory alone.
 
-OUTPUT FORMAT — use these XML blocks in your responses:
+WHEN YOU RECEIVE A TASK:
+- Immediately decide how to break it down into sub-agent assignments
+- Describe each agent's task clearly using what you know from context
+- The agents will discover file paths, function names, and code patterns themselves
+- Spawn multiple agents in parallel when tasks are independent
+- Respond in seconds, not minutes
 
-To spawn sub-agents (one or more per response):
 <SPAWN name="short-name">
-Detailed, self-contained task. Include specific file paths, function names, and \
-expected outcomes. The agent should be able to complete this without further context.
+Clear task description. State the goal and constraints. The agent has full \
+codebase access and will find the relevant files itself.
 </SPAWN>
 
-To answer a sub-agent question:
-<ANSWER>Your answer based on the context tree and task knowledge</ANSWER>
+WHEN AN AGENT HAS A QUESTION:
+Consult the CONTEXT TREE — the answer is often already there from a prior \
+task or agent result. Only escalate to the user for product decisions or preferences.
 
-To escalate a question to the user (ONLY when you truly cannot answer):
-<ESCALATE>The specific question for the user, with brief context about why</ESCALATE>
+<ANSWER>Your answer from context</ANSWER>
+<ESCALATE>Question for the user (last resort)</ESCALATE>
 
-To approve a sub-agent result:
-<APPROVE agent="name">Brief summary of what was accomplished</APPROVE>
+WHEN AN AGENT FINISHES:
+Decide quickly:
+- Work complete? → <APPROVE> and <REPORT>
+- Needs fixes? → <FIX> with what is wrong
+- Needs follow-up? → <SPAWN> more agents
+- Output relevant to another agent's question? → Connect the dots
 
-To request fixes from a sub-agent:
-<FIX agent="name">What needs to be fixed and why</FIX>
+<APPROVE agent="name">What was accomplished</APPROVE>
+<FIX agent="name">What to fix and why</FIX>
+<REPORT>Summary for the user — spoken aloud, under 3 sentences</REPORT>
 
-To spawn follow-up work after reviewing a result:
-Use <SPAWN> blocks (same as above).
-
-To report final results to the EM (for speaking to the user):
-<REPORT>Concise summary of all completed work — this will be spoken aloud, \
-keep it under 3 sentences</REPORT>
-
-RULES:
-- Always consult the CONTEXT TREE before answering sub-agent questions — \
-  the answer is often already there from a prior task or agent result
-- Always try to answer sub-agent questions yourself before escalating
-- When spawning, give MAXIMUM context — the agent works in an isolated worktree \
-  and cannot ask you clarifying questions easily
-- When reviewing results, check for completeness against the original task
-- Spawn multiple agents in parallel when tasks are independent
-- Keep REPORT summaries conversational — they will be read aloud to the user
-- You have coding tools available — use them to gather context before spawning \
-  agents (read files, search code, understand the codebase)`;
+BE FAST. The user is waiting. Spawn immediately, review immediately, \
+answer immediately. You are a router with memory, not a researcher.`;
 
 // ── Response Parsing ──
 
@@ -126,6 +116,7 @@ export class TechLead {
       model: "opus",
       permissionMode,
       appendSystemPrompt: TL_SYSTEM_PROMPT,
+      tools: "",  // No tools — TL is a fast coordinator, not a researcher
     });
     this.contextTree = new ContextTree();
   }
@@ -138,10 +129,13 @@ export class TechLead {
     this._session.sessionId = id;
   }
 
-  async delegateTask(task: string): Promise<TLResponse> {
+  async delegateTask(
+    task: string,
+    onEvent?: (event: Record<string, any>) => void
+  ): Promise<TLResponse> {
     this.contextTree.addTask(task);
     const prompt = this._withContext(task);
-    const events = await this._collect(prompt);
+    const events = await this._collect(prompt, onEvent);
     return parseTLResponse(events);
   }
 
@@ -202,10 +196,28 @@ export class TechLead {
     return `[CONTEXT TREE]\n${this.contextTree.serialize()}\n[/CONTEXT TREE]\n\n${prompt}`;
   }
 
-  private async _collect(prompt: string): Promise<Record<string, any>[]> {
+  private async _collect(
+    prompt: string,
+    onEvent?: (event: Record<string, any>) => void
+  ): Promise<Record<string, any>[]> {
+    console.log("[tl] sending prompt to TL session...", prompt.slice(0, 120));
     const events: Record<string, any>[] = [];
-    for await (const event of this._session.send(prompt)) {
-      events.push(event);
+    try {
+      for await (const event of this._session.send(prompt)) {
+        events.push(event);
+        if (onEvent) onEvent(event);
+        if (event.type === "assistant") {
+          const text = (event.message?.content || [])
+            .filter((c: any) => c.type === "text")
+            .map((c: any) => c.text)
+            .join("");
+          if (text) console.log("[tl] assistant text:", text.slice(0, 200));
+        }
+      }
+      console.log("[tl] session.send() finished, got", events.length, "events");
+    } catch (e) {
+      console.error("[tl] session.send() threw:", e);
+      throw e;
     }
     return events;
   }

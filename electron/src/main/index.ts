@@ -88,9 +88,10 @@ async function createWindow() {
   }
 
   // Create the chat engine
+  // EM is a fast classifier — Sonnet is sufficient and much faster
   const session = new ClaudeSession({
     cwd: targetCwd,
-    model: "opus",
+    model: "sonnet",
     permissionMode: "acceptEdits",
     tools: "",
   });
@@ -136,6 +137,9 @@ async function createWindow() {
         break;
       case "clear_images":
         engine.clearImages();
+        break;
+      case "compact":
+        engine.compactConversation();
         break;
       case "quit":
         engine.stop();

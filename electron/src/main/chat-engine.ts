@@ -281,6 +281,40 @@ export class ChatEngine {
     this._micEvent.set();
   }
 
+  async compactConversation(): Promise<void> {
+    if (!this._currentConvId || this._convMessages.length < 1) return;
+
+    const convId = this._currentConvId;
+    const timestamp = new Date().toLocaleTimeString("en-US", {
+      hour12: false, hour: "2-digit", minute: "2-digit",
+    });
+
+    // Generate summary from conversation messages
+    let summary = "Conversation compacted by user";
+    try {
+      const result = await checkConversationComplete(this._convMessages);
+      if (result.summary) summary = result.summary;
+    } catch {}
+
+    const conv = this._convLog.find((c) => c.id === convId);
+    if (conv) {
+      conv.status = "compacted";
+      conv.summary = summary;
+      conv.end_timestamp = timestamp;
+    }
+    this._send("conversation_compacted", {
+      conversation_id: convId,
+      summary,
+      timestamp,
+    });
+    this._currentConvId = null;
+    this._convMessages = [];
+    this._scheduleStateSave();
+
+    const msg = "Conversation compacted.";
+    this._sendTranscript("claude", msg);
+  }
+
   prDecision(agentId: string, approved: boolean): void {
     const prUrl = this._agentManager.handlePrDecision(agentId, approved);
     let ack: string;
@@ -447,7 +481,6 @@ export class ChatEngine {
         this._sendTranscript("user", text);
         this._sendAction(`text: ${text.slice(0, 60)}`);
         await this._processUserInput(text, turn);
-        this._checkCompaction().catch(() => {});
         continue;
       }
 
@@ -504,7 +537,6 @@ export class ChatEngine {
       this._sendTranscript("user", transcript);
       this._sendAction(`heard: ${transcript.slice(0, 60)}`);
       await this._processUserInput(transcript, turn);
-      this._checkCompaction().catch(() => {});
     }
 
     this._sendAction("bye");
@@ -540,6 +572,13 @@ export class ChatEngine {
     if (this._awaitingQuestionAgentId) {
       const agentId = this._awaitingQuestionAgentId;
       this.agentAnswer(agentId, transcript);
+      return;
+    }
+
+    // USER-INITIATED COMPACTION
+    const lowerTrimmed = transcript.toLowerCase().trim();
+    if (lowerTrimmed === "compact" || lowerTrimmed === "/compact" || lowerTrimmed === "compact conversation") {
+      await this.compactConversation();
       return;
     }
 
@@ -616,17 +655,10 @@ export class ChatEngine {
       this._handleTLEscalationResponse(
         this._awaitingTLEscalation || "", this._awaitingTLAgentId, route.content
       );
-    } else if (route?.target.startsWith("agent:")) {
-      const agentRef = route.target.slice(6);
-      const agent = this._agentManager.resolveAgentRef(agentRef);
-      if (agent) {
-        this._agentManager.sendToAgent(
-          agent, route.content,
-          (id, ev) => this._onSubEvent(id, ev),
-          (id) => this._onSubDone(id),
-        );
-        this._send("agent_status", { agent_id: agent.id, status: "working", name: agent.name });
-      }
+    } else if (route) {
+      // Any other ROUTE target (including agent:) goes through TL — EM never
+      // talks to agents directly. TL owns all agent coordination.
+      this._delegateToTechLead(route.content);
     }
 
     if (spoken) {
@@ -640,24 +672,53 @@ export class ChatEngine {
   // ── Tech Lead integration ──
 
   private _delegateToTechLead(task: string): void {
+    console.log("[engine] delegating to TL:", task.slice(0, 120));
     this._sendAction("tech lead is planning...");
     this._sendTicker("tech lead");
 
-    this._techLead.delegateTask(task).then((response) => {
+    this._techLead.delegateTask(task, (event) => {
+      // Stream TL tool calls to the UI ticker
+      if (event.type === "assistant") {
+        const content = event.message?.content || [];
+        for (const item of content) {
+          if (item.type === "tool_use") {
+            const tname = item.name || "?";
+            const short = summarizeToolArgs(tname, item.input || {});
+            this._sendTicker(`TL: ${tname}(${short})`);
+          }
+        }
+      }
+    }).then((response) => {
+      console.log("[engine] TL responded:", JSON.stringify({
+        spawns: response.spawns.length,
+        escalation: !!response.escalation,
+        report: !!response.report,
+        answer: !!response.answer,
+        fixes: response.fixes.length,
+      }));
       this._sendTicker("");
       for (const [name, agentTask] of response.spawns) {
+        console.log("[engine] TL spawning:", name, agentTask.slice(0, 80));
         try { this._spawnSub(name, agentTask); } catch (e) {
           console.error(`[tl] spawn failed for ${name}:`, e);
         }
       }
       if (response.escalation) {
+        console.log("[engine] TL escalating:", response.escalation.slice(0, 80));
         this._awaitingTLEscalation = response.escalation;
         this._speechQueue.put("tech lead", response.escalation, {
           requiresResponse: true, questionType: "agent_question",
         });
       }
       if (response.report) {
+        console.log("[engine] TL report:", response.report.slice(0, 80));
         this._speakTLReport(response.report);
+      }
+      if (!response.spawns.length && !response.escalation && !response.report) {
+        console.warn("[engine] TL returned no actionable output — speaking raw response");
+        const { extractFinalText } = require("./narrator");
+        // Nothing structured — TL might have just spoken plainly
+        this._speechQueue.put("tech lead", "The tech lead is working on it.");
       }
     }).catch((e) => {
       console.error("[tl] delegate error:", e);
