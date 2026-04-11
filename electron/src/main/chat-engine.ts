@@ -670,7 +670,7 @@ export class ChatEngine {
     agentId: string, agentName: string, question: string, task: string
   ): void {
     this._sendAction(`tech lead answering ${agentName}...`);
-    this._techLead.handleAgentQuestion(agentName, question, task).then((response) => {
+    this._techLead.handleAgentQuestion(agentName, agentId, question, task).then((response) => {
       if (response.answer) {
         this._agentManager.handleAgentQuestion(
           agentId, response.answer,
@@ -698,7 +698,7 @@ export class ChatEngine {
   private _handleTLEscalationResponse(
     question: string, agentId: string | null, userAnswer: string
   ): void {
-    this._techLead.forwardUserAnswer(question, userAnswer).then((response) => {
+    this._techLead.forwardUserAnswer(question, userAnswer, agentId).then((response) => {
       if (response.answer && agentId) {
         this._agentManager.handleAgentQuestion(
           agentId, response.answer,
@@ -719,7 +719,7 @@ export class ChatEngine {
     const summary = extractFinalText(agent.events) || "Completed with no summary.";
     this._sendAction(`tech lead reviewing ${agent.name}...`);
 
-    this._techLead.reviewResult(agent.name, agent.task, summary).then((response) => {
+    this._techLead.reviewResult(agent.name, agent.id, agent.task, summary).then((response) => {
       for (const [fixName, fixInstruction] of response.fixes) {
         const fixAgent = this._agentManager.resolveAgentRef(fixName);
         if (fixAgent) {
@@ -910,7 +910,7 @@ export class ChatEngine {
         agent_id: agent.id,
       });
     }
-    // TL is notified of spawns via its own session context
+    this._techLead.contextTree.addAgent(name, agent.id, task);
     this._scheduleStateSave();
     return agent;
   }
@@ -945,6 +945,7 @@ export class ChatEngine {
     const agent = this._agentManager.agents.get(agentId);
     if (!agent) return;
 
+    this._techLead.contextTree.updateAgentStatus(agentId, agent.status as any);
     this._send("agent_status", {
       agent_id: agentId,
       status: agent.status,
