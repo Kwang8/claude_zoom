@@ -154,6 +154,8 @@ export class ChatEngine {
   private _compactionPending: boolean = false;
   private _saveTimer: ReturnType<typeof setTimeout> | null = null;
   private _convStatus: string = "active";
+  private _focused: boolean = true;
+  private _unreadCount: number = 0;
 
   constructor(
     session: ClaudeSession,
@@ -238,6 +240,19 @@ export class ChatEngine {
       return false;
     }
     return typeof msg.text === "string" && msg.text.startsWith("Welcome back! Resumed previous session");
+  }
+
+  // ── Focus management ──
+
+  setFocused(focused: boolean): void {
+    this._focused = focused;
+    if (focused && this._unreadCount > 0) {
+      this._unreadCount = 0;
+    }
+  }
+
+  get isFocused(): boolean {
+    return this._focused;
   }
 
   // ── Public API ──
@@ -824,7 +839,11 @@ export class ChatEngine {
           ? `${response.report} PR created: ${agent.prUrl}`
           : `Agent ${agent.name} finished. PR created: ${agent.prUrl}`;
         this._sendTranscript("claude", prMsg);
-        this._speak(prMsg);
+        if (this._focused) {
+          this._speak(prMsg);
+        } else {
+          this._unreadCount++;
+        }
       }
     }).catch((e) => {
       console.error(`[tl] review error for ${agent.name}:`, e);
@@ -833,7 +852,11 @@ export class ChatEngine {
   }
 
   private _speakTLReport(report: string): void {
-    this._speechQueue.put("tech lead", report);
+    if (this._focused) {
+      this._speechQueue.put("tech lead", report);
+    } else {
+      this._unreadCount++;
+    }
   }
 
   // ── Routing helper ──

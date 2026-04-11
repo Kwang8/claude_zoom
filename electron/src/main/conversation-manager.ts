@@ -57,7 +57,13 @@ export class ConversationManager {
 
   setActive(id: string): void {
     if (this._conversations.has(id)) {
+      // Unfocus the previous active conversation
+      if (this.activeConversationId) {
+        this._conversations.get(this.activeConversationId)?.engine.setFocused(false);
+      }
       this.activeConversationId = id;
+      // Focus the new active conversation
+      this._conversations.get(id)?.engine.setFocused(true);
       this._saveRegistry();
     }
   }

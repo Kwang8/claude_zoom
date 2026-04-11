@@ -113,11 +113,13 @@ function deriveSummary(conversation: ConversationGroup, transcript: TranscriptMe
 function CollapsedEntry({
   conversation,
   summary,
+  messages,
   onClick,
   onMerge,
 }: {
   conversation: ConversationGroup;
   summary: string | null;
+  messages?: TranscriptMessage[];
   onClick: () => void;
   onMerge?: () => void;
 }) {
@@ -153,6 +155,11 @@ function CollapsedEntry({
               merge
             </button>
           )}
+        </div>
+      )}
+      {messages && messages.length > 0 && (
+        <div className="worklog-entry-inline-transcript">
+          <GroupedTranscript messages={messages} githubRepo={null} hideToolCalls={true} />
         </div>
       )}
     </div>
@@ -236,12 +243,17 @@ export function WorkLogView({
         }
 
         // Non-focused — collapsed with status badge
+        // Completed/pr_open: toggle expand inline. Active/working/needs_input: switch to it.
+        const isFinished = conv.status === "completed" || conv.status === "pr_open";
+        const isExpanded = expandedConversationIds.includes(conv.id);
+
         return (
           <CollapsedEntry
             key={conv.id}
             conversation={conv}
             summary={deriveSummary(conv, transcript)}
-            onClick={() => onSwitchConversation(conv.id)}
+            messages={isFinished && isExpanded ? messages : undefined}
+            onClick={isFinished ? () => onToggleExpand(conv.id) : () => onSwitchConversation(conv.id)}
             onMerge={conv.status === "pr_open" ? () => onMergePr(conv.id) : undefined}
           />
         );
