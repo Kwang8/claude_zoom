@@ -137,6 +137,12 @@ async function createWindow() {
       case "clear_images":
         engine.clearImages();
         break;
+      case "create_conversation":
+        engine.createConversation();
+        break;
+      case "switch_conversation":
+        engine.switchConversation(msg.conversation_id || "");
+        break;
       case "quit":
         engine.stop();
         app.quit();

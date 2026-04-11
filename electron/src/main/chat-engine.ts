@@ -325,6 +325,20 @@ export class ChatEngine {
     if (n) this._sendTranscript("system", `cleared ${n} image(s)`);
   }
 
+  createConversation(): void {
+    this._startConversation();
+    this._send("conversation_switched", { conversation_id: this._currentConvId });
+  }
+
+  switchConversation(id: string): void {
+    const conv = this._convLog.find((c) => c.id === id);
+    if (!conv) return;
+    this._currentConvId = id;
+    this._convMessages = this._transcriptLog.filter((m) => m.conversation_id === id);
+    this._compactionPending = false;
+    this._send("conversation_switched", { conversation_id: id });
+  }
+
   // ── Conversation lifecycle ──
 
   private _startConversation(): void {
