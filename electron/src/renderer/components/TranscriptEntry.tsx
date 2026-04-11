@@ -8,8 +8,8 @@ interface Props {
 
 const ROLE_LABELS: Record<string, string> = {
   user: "you",
-  claude: "claude",
-  claude_error: "claude (error)",
+  claude: "Engineering Manager",
+  claude_error: "Engineering Manager (error)",
 };
 
 // Matches full URLs or owner/repo#123 or bare #123
