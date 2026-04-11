@@ -130,20 +130,25 @@ function CollapsedEntry({
   const info = STATUS_LABELS[conversation.status] ?? STATUS_LABELS.active;
 
   return (
-    <div className={`worklog-entry collapsed ${info.className}`}>
-      <button className="worklog-entry-header" onClick={onClick} type="button">
+    <div
+      className={`worklog-entry collapsed ${info.className}`}
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+    >
+      <div className="worklog-entry-header">
         <span className="worklog-entry-time">{conversation.startTimestamp}</span>
         <span className={`worklog-status-badge ${info.className}`}>{info.label}</span>
         {conversation.detail && (
           <span className="worklog-entry-detail">{conversation.detail}</span>
         )}
         <span className="worklog-expand-indicator">▼</span>
-      </button>
+      </div>
       {summary && (
         <div className="worklog-entry-summary-line">{summary}</div>
       )}
       {conversation.status === "pr_open" && conversation.prUrl && (
-        <div className="worklog-pr-actions">
+        <div className="worklog-pr-actions" onClick={(e) => e.stopPropagation()}>
           <a
             className="worklog-pr-link"
             href={conversation.prUrl}
@@ -162,7 +167,7 @@ function CollapsedEntry({
         </div>
       )}
       {messages && messages.length > 0 && (
-        <div className="worklog-entry-inline-transcript">
+        <div className="worklog-entry-inline-transcript" onClick={(e) => e.stopPropagation()}>
           <GroupedTranscript messages={messages} githubRepo={null} hideToolCalls={true} />
         </div>
       )}
