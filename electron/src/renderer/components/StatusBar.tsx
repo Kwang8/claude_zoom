@@ -11,13 +11,11 @@ export function StatusBar({ progress, action, connected, isRecording }: Props) {
       <div className={`statusbar-dot ${connected ? "connected" : "disconnected"}`} />
       {progress && <span className="statusbar-progress">{progress}</span>}
       <span className="statusbar-action">{action}</span>
-      {isRecording ? (
+      {isRecording && (
         <span className="recording-indicator">
           <span className="recording-dot" />
           recording
         </span>
-      ) : (
-        <span className="statusbar-hint">hold space · esc cancel · q quit</span>
       )}
     </div>
   );
