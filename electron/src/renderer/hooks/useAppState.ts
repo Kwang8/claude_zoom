@@ -172,6 +172,8 @@ function reducer(state: State, action: Action): State {
         id: msg.conversation_id,
         status: "active",
         summary: null,
+        detail: null,
+        prUrl: null,
         startTimestamp: msg.timestamp,
         endTimestamp: null,
         messageStartIndex: state.transcript.length,
@@ -204,6 +206,21 @@ function reducer(state: State, action: Action): State {
         conversations: state.conversations.map((c) =>
           c.id === msg.conversation_id
             ? { ...c, spawnedAgentIds: [...c.spawnedAgentIds, msg.agent_id] }
+            : c
+        ),
+      };
+
+    case "conversation_status":
+      return {
+        ...state,
+        conversations: state.conversations.map((c) =>
+          c.id === msg.conversation_id
+            ? {
+                ...c,
+                status: msg.status,
+                detail: msg.detail ?? c.detail,
+                prUrl: msg.pr_url ?? c.prUrl,
+              }
             : c
         ),
       };

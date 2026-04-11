@@ -151,6 +151,7 @@ export class ChatEngine {
   private _convLog: ConversationData[] = [];
   private _compactionPending: boolean = false;
   private _saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private _convStatus: string = "active";
 
   constructor(
     session: ClaudeSession,
@@ -186,6 +187,11 @@ export class ChatEngine {
 
   private _sendState(state: string, narration: string = ""): void {
     this._send("state_change", { state, narration });
+  }
+
+  private _emitConvStatus(status: string, detail?: string, prUrl?: string): void {
+    this._convStatus = status;
+    this._emit({ type: "conversation_status", conversation_id: "__self__", status, detail, pr_url: prUrl });
   }
 
   private _sendTranscript(
@@ -564,6 +570,7 @@ export class ChatEngine {
       const agentId = this._awaitingTLAgentId;
       this._awaitingTLEscalation = null;
       this._awaitingTLAgentId = null;
+      this._emitConvStatus("working", "processing your answer");
       this._handleTLEscalationResponse(question, agentId, transcript);
       const ack = "Got it, passing that along.";
       this._sendTranscript("claude", ack);
@@ -663,9 +670,13 @@ export class ChatEngine {
           console.error(`[tl] spawn failed for ${name}:`, e);
         }
       }
+      if (response.spawns.length > 0) {
+        this._emitConvStatus("working", `${response.spawns.length} agent${response.spawns.length > 1 ? "s" : ""} working`);
+      }
       if (response.escalation) {
         console.log("[engine] TL escalating:", response.escalation.slice(0, 80));
         this._awaitingTLEscalation = response.escalation;
+        this._emitConvStatus("needs_input", response.escalation);
         this._speechQueue.put("tech lead", response.escalation, {
           requiresResponse: true, questionType: "agent_question",
         });
@@ -972,12 +983,29 @@ export class ChatEngine {
     this._scheduleStateSave();
 
     if (agent.status === "needs_input" && agent.pendingQuestion) {
+      this._emitConvStatus("needs_input", `${agent.name} needs input`);
       this._handleTLQuestionFromAgent(agentId, agent.name, agent.pendingQuestion, agent.task);
     } else if (agent.status === "done" || agent.status === "pr_pending") {
       this._submitResultToTL(agent);
+      this._checkAllAgentsDone();
     } else if (agent.status === "error") {
       const errMsg = agent.pendingQuestion || "Unknown error";
       this._speechQueue.put(agent.name, `Error: ${errMsg}`, { agentId: agent.id });
+      this._checkAllAgentsDone();
+    }
+  }
+
+  private _checkAllAgentsDone(): void {
+    const all = this._agentManager.allAgents;
+    if (all.length === 0) return;
+    const allDone = all.every((a) => a.status === "done" || a.status === "error");
+    if (!allDone) return;
+
+    const prUrls = all.map((a) => a.prUrl).filter(Boolean) as string[];
+    if (prUrls.length > 0) {
+      this._emitConvStatus("pr_open", `${prUrls.length} PR${prUrls.length > 1 ? "s" : ""} open`, prUrls[0]);
+    } else {
+      this._emitConvStatus("completed", "All agents finished");
     }
   }
 

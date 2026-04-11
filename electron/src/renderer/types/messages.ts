@@ -33,12 +33,20 @@ export interface TranscriptMessage {
   conversation_id?: string;
 }
 
-export type ConversationStatus = "active" | "compacted";
+export type ConversationStatus =
+  | "active"
+  | "working"
+  | "needs_input"
+  | "pr_open"
+  | "completed"
+  | "compacted";
 
 export interface ConversationGroup {
   id: string;
   status: ConversationStatus;
   summary: string | null;
+  detail: string | null;
+  prUrl: string | null;
   startTimestamp: string;
   endTimestamp: string | null;
   messageStartIndex: number;
@@ -87,4 +95,5 @@ export type ServerMessage =
   | { type: "conversation_compacted"; conversation_id: string; summary: string; timestamp: string }
   | { type: "conversation_agent_spawned"; conversation_id: string; agent_id: string }
   | { type: "conversation_created"; conversation_id: string; timestamp: string }
-  | { type: "conversation_switched"; conversation_id: string };
+  | { type: "conversation_switched"; conversation_id: string }
+  | { type: "conversation_status"; conversation_id: string; status: ConversationStatus; detail?: string; pr_url?: string };

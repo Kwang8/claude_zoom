@@ -90,29 +90,35 @@ function ActiveConversation({
   );
 }
 
-/** A live conversation that isn't focused — collapsed, clickable to switch. */
-function CollapsedLiveEntry({
+const STATUS_LABELS: Record<string, { label: string; className: string }> = {
+  working: { label: "working", className: "status-working" },
+  needs_input: { label: "needs input", className: "status-needs-input" },
+  pr_open: { label: "PR open", className: "status-pr-open" },
+  completed: { label: "completed", className: "status-completed" },
+  active: { label: "live", className: "status-active" },
+};
+
+/** A non-focused conversation — collapsed with status badge, clickable to switch. */
+function CollapsedEntry({
   conversation,
-  messageCount,
   onClick,
 }: {
   conversation: ConversationGroup;
-  messageCount: number;
   onClick: () => void;
 }) {
+  const info = STATUS_LABELS[conversation.status] ?? STATUS_LABELS.active;
+
   return (
     <button
-      className="worklog-entry active collapsed"
+      className={`worklog-entry collapsed ${info.className}`}
       onClick={onClick}
       type="button"
     >
       <div className="worklog-entry-header">
         <span className="worklog-entry-time">{conversation.startTimestamp}</span>
-        <span className="worklog-entry-live-badge">live</span>
-        {messageCount > 0 && (
-          <span className="worklog-entry-msg-count">
-            {messageCount} message{messageCount !== 1 ? "s" : ""}
-          </span>
+        <span className={`worklog-status-badge ${info.className}`}>{info.label}</span>
+        {conversation.detail && (
+          <span className="worklog-entry-detail">{conversation.detail}</span>
         )}
         <span className="worklog-expand-indicator">▼</span>
       </div>
@@ -184,8 +190,8 @@ export function WorkLogView({
           );
         }
 
-        // Active (live) conversation
-        if (conv.id === activeConversationId) {
+        // Focused conversation — fully expanded
+        if (conv.id === activeConversationId && conv.status === "active") {
           return (
             <ActiveConversation
               key={conv.id}
@@ -195,12 +201,11 @@ export function WorkLogView({
           );
         }
 
-        // Live but not focused — show collapsed
+        // Non-focused — collapsed with status badge
         return (
-          <CollapsedLiveEntry
+          <CollapsedEntry
             key={conv.id}
             conversation={conv}
-            messageCount={messages.filter((m) => m.role !== "system").length}
             onClick={() => onSwitchConversation(conv.id)}
           />
         );

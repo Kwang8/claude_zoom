@@ -659,19 +659,71 @@
   background: color-mix(in srgb, var(--bg-card) 88%, var(--accent-cyan) 12%);
 }
 
-.worklog-entry.active.collapsed {
+.worklog-entry.collapsed {
   cursor: pointer;
-  border-color: color-mix(in srgb, var(--border) 60%, var(--accent-cyan) 40%);
   background: var(--bg-card);
   transition: background 0.15s, border-color 0.15s;
 }
 
-.worklog-entry.active.collapsed:hover {
+.worklog-entry.collapsed:hover {
   background: var(--bg-card-hover);
-  border-color: var(--accent-cyan);
 }
 
-.worklog-entry-msg-count {
+.worklog-entry.collapsed.status-working {
+  border-color: color-mix(in srgb, var(--border) 60%, var(--accent-cyan) 40%);
+}
+.worklog-entry.collapsed.status-working:hover { border-color: var(--accent-cyan); }
+
+.worklog-entry.collapsed.status-needs-input {
+  border-color: color-mix(in srgb, var(--border) 40%, var(--accent-purple) 60%);
+}
+.worklog-entry.collapsed.status-needs-input:hover { border-color: var(--accent-purple); }
+
+.worklog-entry.collapsed.status-pr-open {
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent-yellow) 50%);
+}
+
+.worklog-entry.collapsed.status-completed {
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent-green) 50%);
+}
+
+.worklog-status-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.worklog-status-badge.status-working {
+  color: var(--accent-cyan);
+  background: color-mix(in srgb, transparent 80%, var(--accent-cyan) 20%);
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+
+.worklog-status-badge.status-needs-input {
+  color: var(--accent-purple);
+  background: color-mix(in srgb, transparent 80%, var(--accent-purple) 20%);
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+
+.worklog-status-badge.status-pr-open {
+  color: var(--accent-yellow);
+  background: color-mix(in srgb, transparent 80%, var(--accent-yellow) 20%);
+}
+
+.worklog-status-badge.status-completed {
+  color: var(--accent-green);
+  background: color-mix(in srgb, transparent 80%, var(--accent-green) 20%);
+}
+
+.worklog-status-badge.status-active {
+  color: var(--accent-cyan);
+  background: color-mix(in srgb, transparent 80%, var(--accent-cyan) 20%);
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+
+.worklog-entry-detail {
   font-size: 11px;
   color: var(--text-muted);
   margin-left: auto;
