@@ -148,7 +148,7 @@ export function WorkLogView({
   return (
     <div className="worklog">
       <div className="worklog-toolbar">
-        <div className="worklog-title">work log</div>
+        <div className="worklog-title">Conversations</div>
         <button
           className="worklog-new-btn"
           onClick={onNewConversation}
