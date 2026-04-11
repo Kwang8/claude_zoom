@@ -1103,6 +1103,7 @@ export class ChatEngine {
         events: [],
         taskQueue: [],
         branch: a.branch,
+        prUrl: null,
         number: a.number,
         pendingQuestion: null,
       };
