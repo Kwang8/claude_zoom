@@ -1078,7 +1078,8 @@ export class ChatEngine {
     if (prUrls.length > 0) {
       this._emitConvStatus("pr_open", `${prUrls.length} PR${prUrls.length > 1 ? "s" : ""} open`, prUrls[0]);
     } else {
-      this._emitConvStatus("completed", "All agents finished");
+      // No PRs — go back to idle, not completed. User can continue or start new.
+      this._emitConvStatus("active");
     }
   }
 
