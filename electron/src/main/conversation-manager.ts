@@ -89,8 +89,14 @@ export class ConversationManager {
   }
 
   async startAll(): Promise<void> {
-    for (const { engine } of this._conversations.values()) {
-      await engine.start();
+    // Only start the active conversation's engine. Others stay dormant.
+    for (const { id, engine } of this._conversations.values()) {
+      if (id === this.activeConversationId) {
+        engine.setFocused(true);
+        await engine.start();
+      } else {
+        engine.setFocused(false);
+      }
     }
   }
 
