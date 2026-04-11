@@ -113,11 +113,15 @@ async function createWindow() {
     // ── Conversation management commands ──
     if (msgType === "create_conversation") {
       const id = conversationManager.createConversation();
+      // Send conversation_created BEFORE starting the engine so the renderer
+      // has a ConversationGroup ready when messages start arriving.
+      mainWindow?.webContents.send("engine-event", {
+        type: "conversation_created",
+        conversation_id: id,
+        timestamp: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
+      });
+      conversationManager.setActive(id);
       conversationManager.getConversation(id)!.start().then(() => {
-        mainWindow?.webContents.send("engine-event", {
-          type: "conversation_created",
-          conversation_id: id,
-        });
         console.log("[main] new conversation started:", id);
       }).catch((err) => {
         console.error("[main] failed to start new conversation:", err);
@@ -191,6 +195,14 @@ async function createWindow() {
   // When renderer is ready, replay state for all conversations and send repo context
   mainWindow.webContents.on("did-finish-load", () => {
     if (!conversationManager) return;
+    // Send conversation_created for each conversation before replaying messages
+    for (const conv of conversationManager.listConversations()) {
+      mainWindow?.webContents.send("engine-event", {
+        type: "conversation_created",
+        conversation_id: conv.id,
+        timestamp: new Date(conv.createdAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
+      });
+    }
     conversationManager.replayStateAll();
     const repo = conversationManager.githubRepo;
     if (repo) {
