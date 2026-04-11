@@ -182,6 +182,9 @@ async function createWindow() {
       case "clear_images":
         engine.clearImages();
         break;
+      case "merge_pr":
+        engine.mergeOpenPrs();
+        break;
       case "compact":
         engine.compactConversation();
         break;

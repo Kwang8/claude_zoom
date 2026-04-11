@@ -12,6 +12,7 @@ export type ClientMessage =
   | { type: "clear_images" }
   | { type: "create_conversation" }
   | { type: "switch_conversation"; conversation_id: string }
+  | { type: "merge_pr" }
   | { type: "quit" };
 
 // ── Server -> Client ──

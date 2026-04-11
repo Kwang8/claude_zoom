@@ -176,6 +176,36 @@ function commitAndPush(agent: AgentInstance): string | null {
   return branch;
 }
 
+/** Check if a PR is merged via gh CLI. */
+export function checkPrStatus(prUrl: string, cwd: string = "."): "open" | "merged" | "closed" | "unknown" {
+  try {
+    const out = execFileSync(
+      "gh", ["pr", "view", prUrl, "--json", "state", "--jq", ".state"],
+      { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+    );
+    const state = out.trim().toUpperCase();
+    if (state === "MERGED") return "merged";
+    if (state === "CLOSED") return "closed";
+    if (state === "OPEN") return "open";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Merge a PR via gh CLI. Returns true if successful. */
+export function mergePr(prUrl: string, cwd: string = "."): boolean {
+  try {
+    execFileSync(
+      "gh", ["pr", "merge", prUrl, "--squash", "--delete-branch"],
+      { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function createPr(agent: AgentInstance, branch: string): string | null {
   const cwd = agent.worktreePath || ".";
   const title = `[claude-zoom] ${agent.name}: ${agent.task.slice(0, 60)}`;

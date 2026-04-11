@@ -113,6 +113,10 @@ export function App() {
         onToggleExpand={toggleConversationExpand}
         onSwitchConversation={handleSwitchConversation}
         onNewConversation={handleNewConversation}
+        onMergePr={(convId) => {
+          send({ type: "switch_conversation", conversation_id: convId });
+          send({ type: "merge_pr" });
+        }}
       />
     );
   }

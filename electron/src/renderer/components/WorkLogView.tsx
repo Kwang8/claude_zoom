@@ -12,6 +12,7 @@ interface Props {
   onToggleExpand: (conversationId: string) => void;
   onSwitchConversation: (conversationId: string) => void;
   onNewConversation: () => void;
+  onMergePr: (conversationId: string) => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -102,27 +103,44 @@ const STATUS_LABELS: Record<string, { label: string; className: string }> = {
 function CollapsedEntry({
   conversation,
   onClick,
+  onMerge,
 }: {
   conversation: ConversationGroup;
   onClick: () => void;
+  onMerge?: () => void;
 }) {
   const info = STATUS_LABELS[conversation.status] ?? STATUS_LABELS.active;
 
   return (
-    <button
-      className={`worklog-entry collapsed ${info.className}`}
-      onClick={onClick}
-      type="button"
-    >
-      <div className="worklog-entry-header">
+    <div className={`worklog-entry collapsed ${info.className}`}>
+      <button className="worklog-entry-header" onClick={onClick} type="button">
         <span className="worklog-entry-time">{conversation.startTimestamp}</span>
         <span className={`worklog-status-badge ${info.className}`}>{info.label}</span>
         {conversation.detail && (
           <span className="worklog-entry-detail">{conversation.detail}</span>
         )}
         <span className="worklog-expand-indicator">▼</span>
-      </div>
-    </button>
+      </button>
+      {conversation.status === "pr_open" && conversation.prUrl && (
+        <div className="worklog-pr-actions">
+          <a
+            className="worklog-pr-link"
+            href={conversation.prUrl}
+            onClick={(e) => {
+              e.preventDefault();
+              window.claude?.send({ type: "open_external", url: conversation.prUrl });
+            }}
+          >
+            {conversation.prUrl}
+          </a>
+          {onMerge && (
+            <button className="worklog-merge-btn" onClick={onMerge} type="button">
+              merge
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -134,6 +152,7 @@ export function WorkLogView({
   expandedConversationIds,
   onToggleExpand,
   onSwitchConversation,
+  onMergePr,
   onNewConversation,
 }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
@@ -207,6 +226,7 @@ export function WorkLogView({
             key={conv.id}
             conversation={conv}
             onClick={() => onSwitchConversation(conv.id)}
+            onMerge={conv.status === "pr_open" ? () => onMergePr(conv.id) : undefined}
           />
         );
       })}

@@ -7,6 +7,8 @@ import {
   inferGithubRepo,
   parseAgentTarget,
   parseVoiceTrigger,
+  mergePr,
+  checkPrStatus,
 } from "./agent-manager";
 import { extractFinalText, checkConversationComplete } from "./narrator";
 import { TechLead } from "./tech-lead";
@@ -335,6 +337,55 @@ export class ChatEngine {
     this._awaitingPrAgentId = null;
   }
 
+  /** Merge open PRs for this conversation and transition to completed. */
+  mergeOpenPrs(): void {
+    const agents = this._agentManager.allAgents.filter((a) => a.prUrl);
+    if (agents.length === 0) {
+      this._sendTranscript("claude", "No open PRs to merge.");
+      this._speak("No open PRs to merge.");
+      return;
+    }
+
+    let merged = 0;
+    let failed = 0;
+    const cwd = this.session.cwd || ".";
+    for (const agent of agents) {
+      const url = agent.prUrl!;
+      const status = checkPrStatus(url, cwd);
+      if (status === "merged") {
+        merged++;
+        continue;
+      }
+      if (status === "open") {
+        const ok = mergePr(url, cwd);
+        if (ok) {
+          merged++;
+          this._sendTranscript("claude", `Merged: ${url}`);
+        } else {
+          failed++;
+          this._sendTranscript("claude_error", `Failed to merge: ${url}`);
+        }
+      } else {
+        failed++;
+        this._sendTranscript("claude", `PR is ${status}: ${url}`);
+      }
+    }
+
+    const total = agents.length;
+    if (merged === total) {
+      const ack = `All ${total} PR${total > 1 ? "s" : ""} merged!`;
+      this._sendTranscript("claude", ack);
+      this._speak(ack);
+      this._emitConvStatus("completed", "PRs merged");
+    } else if (merged > 0) {
+      const ack = `Merged ${merged}/${total} PRs. ${failed} failed.`;
+      this._sendTranscript("claude", ack);
+      this._speak(ack);
+    } else {
+      this._speak(`Failed to merge ${failed} PR${failed > 1 ? "s" : ""}.`);
+    }
+  }
+
   agentAnswer(agentId: string, text: string): void {
     const agent = this._agentManager.agents.get(agentId);
     if (agent && agent.status === "needs_input") {
@@ -585,10 +636,16 @@ export class ChatEngine {
       return;
     }
 
-    // USER-INITIATED COMPACTION
+    // USER-INITIATED COMMANDS
     const lowerTrimmed = transcript.toLowerCase().trim();
     if (lowerTrimmed === "compact" || lowerTrimmed === "/compact" || lowerTrimmed === "compact conversation") {
       await this.compactConversation();
+      return;
+    }
+
+    // MERGE PR command
+    if (["merge", "merge it", "merge the pr", "merge pr", "merge prs", "ship it"].some((w) => lowerTrimmed === w)) {
+      this.mergeOpenPrs();
       return;
     }
 

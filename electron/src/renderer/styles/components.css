@@ -736,6 +736,61 @@
   margin-left: auto;
 }
 
+.worklog-pr-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.worklog-pr-link {
+  font-size: 12px;
+  color: var(--accent-cyan);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.3);
+  cursor: pointer;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worklog-pr-link:hover {
+  border-bottom-color: var(--accent-cyan);
+}
+
+.worklog-merge-btn {
+  background: none;
+  border: 1px solid var(--accent-green);
+  color: var(--accent-green);
+  font-size: 11px;
+  padding: 3px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.worklog-merge-btn:hover {
+  background: color-mix(in srgb, transparent 85%, var(--accent-green) 15%);
+}
+
+.worklog-entry.collapsed .worklog-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
 .worklog-entry.compacted .worklog-entry-header {
   display: flex;
   align-items: center;
