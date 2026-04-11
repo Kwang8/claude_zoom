@@ -1,4 +1,4 @@
-import { ClaudeSession, summarizeToolArgs, parseEMRoute, stripRouteBlocks } from "./claude-session";
+import { ClaudeSession, summarizeToolArgs } from "./claude-session";
 import {
   AgentInstance,
   AgentManager,
@@ -601,7 +601,7 @@ export class ChatEngine {
           this._sendTranscript("claude_error", `spawn failed: ${e}`);
         }
       } else {
-        const ack = "On it, passing that to the tech lead.";
+        const ack = "On it, planning that out.";
         this._sendTranscript("claude", ack);
         this._sendState("talking", ack);
         await this._speak(ack);
@@ -621,55 +621,10 @@ export class ChatEngine {
       }
     }
 
-    // EM DECISION — send to main session, parse ROUTE blocks
+    // DIRECT TO TL — no EM middleman
     this._sendState("thinking");
-    this._sendAction("deciding...");
-
-    let emPrompt = transcript;
-    if (this._agentManager.allAgents.length) {
-      const agentsCtx = this._agentManager.allAgents
-        .map((a) => `  - ${a.name} (${a.id}): ${a.status} — ${a.task.slice(0, 80)}`)
-        .join("\n");
-      emPrompt = `[SYSTEM: Active agents:\n${agentsCtx}]\n\n${transcript}`;
-    }
-
-    const events: Record<string, any>[] = [];
-    try {
-      const fullPrompt = buildPromptWithImages(emPrompt, this._imageContext);
-      for await (const event of this.session.send(fullPrompt)) {
-        events.push(event);
-      }
-    } catch (e) {
-      this._sendTranscript("claude_error", String(e));
-      this._sendState("idle");
-      this._sendAction(`error: ${String(e).slice(0, 60)}`);
-      return;
-    }
-
-    if (this._stopFlag.isSet()) return;
-
-    const emText = extractFinalText(events);
-    const route = parseEMRoute(emText);
-    const spoken = route ? stripRouteBlocks(emText) : emText;
-
-    if (route?.target === "tech_lead") {
-      this._delegateToTechLead(route.content);
-    } else if (route?.target === "tech_lead_answer") {
-      this._handleTLEscalationResponse(
-        this._awaitingTLEscalation || "", this._awaitingTLAgentId, route.content
-      );
-    } else if (route) {
-      // Any other ROUTE target (including agent:) goes through TL — EM never
-      // talks to agents directly. TL owns all agent coordination.
-      this._delegateToTechLead(route.content);
-    }
-
-    if (spoken) {
-      this._sendTranscript("claude", spoken);
-      this._sendState("talking", spoken);
-      this._sendAction("speaking (press SPACE to interrupt)");
-      await this._speak(spoken);
-    }
+    this._sendAction("tech lead is thinking...");
+    this._delegateToTechLead(buildPromptWithImages(transcript, this._imageContext));
   }
 
   // ── Tech Lead integration ──
@@ -698,7 +653,9 @@ export class ChatEngine {
         report: !!response.report,
         answer: !!response.answer,
         fixes: response.fixes.length,
+        insights: response.insights.length,
       }));
+      if (response.insights.length > 0) this._scheduleStateSave();
       this._sendTicker("");
       for (const [name, agentTask] of response.spawns) {
         console.log("[engine] TL spawning:", name, agentTask.slice(0, 80));
@@ -718,10 +675,8 @@ export class ChatEngine {
         this._speakTLReport(response.report);
       }
       if (!response.spawns.length && !response.escalation && !response.report) {
-        console.warn("[engine] TL returned no actionable output — speaking raw response");
-        const { extractFinalText } = require("./narrator");
-        // Nothing structured — TL might have just spoken plainly
-        this._speechQueue.put("tech lead", "The tech lead is working on it.");
+        console.warn("[engine] TL returned no actionable output");
+        this._speechQueue.put("tech lead", "On it.");
       }
     }).catch((e) => {
       console.error("[tl] delegate error:", e);
@@ -1056,6 +1011,7 @@ export class ChatEngine {
       conversations: this._convLog,
       current_conversation_id: this._currentConvId,
       tech_lead_session_id: this._techLead.sessionId,
+      tl_memory: this._techLead.getMemory(),
     };
     saveState(state, cwd, stateId);
   }
@@ -1083,6 +1039,9 @@ export class ChatEngine {
     this._agentManager._counter = state.agent_counter;
     if (state.tech_lead_session_id) {
       this._techLead.restoreSession(state.tech_lead_session_id);
+    }
+    if (state.tl_memory) {
+      this._techLead.restoreMemory(state.tl_memory);
     }
 
     // Restore conversations

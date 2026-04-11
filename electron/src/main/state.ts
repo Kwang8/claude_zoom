@@ -29,6 +29,11 @@ export interface ConversationData {
   spawned_agent_ids: string[];
 }
 
+export interface TLMemoryState {
+  insights: string[];
+  decisions: { description: string; outcome: string }[];
+}
+
 export interface AppState {
   main_session_id: string | null;
   main_model: string;
@@ -39,6 +44,7 @@ export interface AppState {
   conversations?: ConversationData[];
   current_conversation_id?: string | null;
   tech_lead_session_id?: string | null;
+  tl_memory?: TLMemoryState | null;
 }
 
 export interface ConversationRegistryEntry {

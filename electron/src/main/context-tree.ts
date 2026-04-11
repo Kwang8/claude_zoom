@@ -4,6 +4,18 @@
 
 export type AgentNodeStatus = "working" | "done" | "error" | "needs_input" | "pr_pending";
 
+// ── Persistent Memory ──
+// Accumulated project knowledge that persists across conversations.
+
+export interface ProjectMemory {
+  insights: string[];
+  decisions: { description: string; outcome: string }[];
+}
+
+export function emptyMemory(): ProjectMemory {
+  return { insights: [], decisions: [] };
+}
+
 export interface AgentNode {
   name: string;
   agentId: string;
@@ -24,6 +36,17 @@ export interface TaskNode {
 export class ContextTree {
   private _tasks: TaskNode[] = [];
   private _taskCounter = 0;
+  memory: ProjectMemory = emptyMemory();
+
+  addInsight(insight: string): void {
+    if (!this.memory.insights.includes(insight)) {
+      this.memory.insights.push(insight);
+    }
+  }
+
+  addDecision(description: string, outcome: string): void {
+    this.memory.decisions.push({ description, outcome });
+  }
 
   /** Record a new top-level task delegated to the TL. Returns task id. */
   addTask(description: string): string {
@@ -86,9 +109,26 @@ export class ContextTree {
 
   /** Serialize the tree into a text block for injection into TL prompts. */
   serialize(): string {
-    if (this._tasks.length === 0) return "[No tasks yet]";
-
     const lines: string[] = [];
+
+    // Project memory
+    if (this.memory.insights.length > 0 || this.memory.decisions.length > 0) {
+      lines.push("## Project Memory");
+      for (const insight of this.memory.insights) {
+        lines.push(`  - ${insight}`);
+      }
+      for (const d of this.memory.decisions) {
+        lines.push(`  - Decision: ${d.description} → ${d.outcome}`);
+      }
+      lines.push("");
+    }
+
+    // Task tree
+    if (this._tasks.length === 0) {
+      lines.push("[No tasks yet]");
+      return lines.join("\n");
+    }
+
     for (const task of this._tasks) {
       lines.push(`## Task ${task.id} [${task.status}]: ${task.description}`);
       if (task.agents.length === 0) {
