@@ -525,7 +525,7 @@ export class ChatEngine {
     if (this._resume) introState = this._restoreState();
     let intro = introState;
     if (intro === null) {
-      intro = "Hey! Press space to talk. You can spin off sub-agents and talk to them by name or number.";
+      intro = "Ready for input.";
     }
     if (intro) {
       this._sendTranscript("claude", intro);
