@@ -655,17 +655,10 @@ export class ChatEngine {
       this._handleTLEscalationResponse(
         this._awaitingTLEscalation || "", this._awaitingTLAgentId, route.content
       );
-    } else if (route?.target.startsWith("agent:")) {
-      const agentRef = route.target.slice(6);
-      const agent = this._agentManager.resolveAgentRef(agentRef);
-      if (agent) {
-        this._agentManager.sendToAgent(
-          agent, route.content,
-          (id, ev) => this._onSubEvent(id, ev),
-          (id) => this._onSubDone(id),
-        );
-        this._send("agent_status", { agent_id: agent.id, status: "working", name: agent.name });
-      }
+    } else if (route) {
+      // Any other ROUTE target (including agent:) goes through TL — EM never
+      // talks to agents directly. TL owns all agent coordination.
+      this._delegateToTechLead(route.content);
     }
 
     if (spoken) {
