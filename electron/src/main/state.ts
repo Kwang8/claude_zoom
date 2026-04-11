@@ -3,6 +3,7 @@ import path from "path";
 
 const STATE_DIR = ".claude_zoom_agents";
 const STATE_FILE = "state.json";
+const REGISTRY_FILE = "conversations_registry.json";
 
 export interface AgentState {
   id: string;
@@ -40,12 +41,62 @@ export interface AppState {
   tech_lead_session_id?: string | null;
 }
 
-function statePath(cwd: string): string {
+export interface ConversationRegistryEntry {
+  id: string;
+  createdAt: string;
+}
+
+export interface ConversationRegistry {
+  activeConversationId: string | null;
+  conversations: ConversationRegistryEntry[];
+}
+
+function statePath(cwd: string, stateId?: string): string {
+  if (stateId) {
+    return path.join(cwd, STATE_DIR, "conversations", stateId, STATE_FILE);
+  }
   return path.join(cwd, STATE_DIR, STATE_FILE);
 }
 
-export function saveState(state: AppState, cwd: string): void {
-  const p = statePath(cwd);
+function registryPath(cwd: string): string {
+  return path.join(cwd, STATE_DIR, REGISTRY_FILE);
+}
+
+export function saveRegistry(registry: ConversationRegistry, cwd: string): void {
+  const p = registryPath(cwd);
+  const tmp = `${p}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify(registry, null, 2));
+    fs.renameSync(tmp, p);
+  } catch (e) {
+    console.warn("[state] failed to save registry:", e);
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+}
+
+export function loadRegistry(cwd: string): ConversationRegistry | null {
+  const p = registryPath(cwd);
+  if (!fs.existsSync(p)) return null;
+  try {
+    const raw = fs.readFileSync(p, "utf-8");
+    if (!raw.trim()) return null;
+    const data = JSON.parse(raw);
+    return {
+      activeConversationId: data.activeConversationId ?? null,
+      conversations: (data.conversations ?? []).map((c: any) => ({
+        id: c.id,
+        createdAt: c.createdAt ?? new Date().toISOString(),
+      })),
+    };
+  } catch (e) {
+    console.warn("[state] failed to load registry:", e);
+    return null;
+  }
+}
+
+export function saveState(state: AppState, cwd: string, stateId?: string): void {
+  const p = statePath(cwd, stateId);
   const tmp = `${p}.tmp`;
   try {
     fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -59,8 +110,8 @@ export function saveState(state: AppState, cwd: string): void {
   }
 }
 
-export function loadState(cwd: string): AppState | null {
-  const p = statePath(cwd);
+export function loadState(cwd: string, stateId?: string): AppState | null {
+  const p = statePath(cwd, stateId);
   if (!fs.existsSync(p)) return null;
   try {
     const raw = fs.readFileSync(p, "utf-8");
@@ -94,8 +145,8 @@ export function loadState(cwd: string): AppState | null {
   }
 }
 
-export function clearState(cwd: string): void {
+export function clearState(cwd: string, stateId?: string): void {
   try {
-    fs.unlinkSync(statePath(cwd));
+    fs.unlinkSync(statePath(cwd, stateId));
   } catch {}
 }
