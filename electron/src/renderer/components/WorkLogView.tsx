@@ -106,8 +106,7 @@ const STATUS_LABELS: Record<string, { label: string; className: string }> = {
 /** Derive a short summary from the first user message in a conversation. */
 function deriveSummary(conversation: ConversationGroup, transcript: TranscriptMessage[]): string | null {
   if (conversation.summary) return conversation.summary;
-  const messages = transcript.slice(conversation.messageStartIndex, conversation.messageEndIndex + 1);
-  const firstUserMsg = messages.find((m) => m.role === "user");
+  const firstUserMsg = transcript.find((m) => m.conversation_id === conversation.id && m.role === "user");
   if (!firstUserMsg) return null;
   const text = firstUserMsg.text.trim();
   return text.length > 80 ? text.slice(0, 77) + "..." : text;
@@ -197,9 +196,9 @@ export function WorkLogView({
     focusedConv?.messageEndIndex,
   ]);
 
-  // Messages that exist before any conversation (intro, etc.)
-  const firstConvStart = conversations.length > 0 ? conversations[0].messageStartIndex : transcript.length;
-  const preConvMessages = transcript.slice(0, firstConvStart);
+  // Messages not belonging to any conversation
+  const convIds = new Set(conversations.map((c) => c.id));
+  const preConvMessages = transcript.filter((m) => !m.conversation_id || !convIds.has(m.conversation_id));
 
   return (
     <div className="worklog">
@@ -222,10 +221,7 @@ export function WorkLogView({
         </div>
       )}
       {conversations.map((conv) => {
-        const messages = transcript.slice(
-          conv.messageStartIndex,
-          conv.messageEndIndex + 1
-        );
+        const messages = transcript.filter((m) => m.conversation_id === conv.id);
 
         if (conv.status === "compacted") {
           return (
