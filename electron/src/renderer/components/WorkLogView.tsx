@@ -7,7 +7,11 @@ interface Props {
   conversations: ConversationGroup[];
   transcript: TranscriptMessage[];
   agents: AgentInfo[];
-  onSelectConversation: (conversationId: string) => void;
+  activeConversationId: string | null;
+  expandedConversationIds: string[];
+  onToggleExpand: (conversationId: string) => void;
+  onSwitchConversation: (conversationId: string) => void;
+  onNewConversation: () => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -21,22 +25,27 @@ const STATUS_COLORS: Record<string, string> = {
 function CompactedEntry({
   conversation,
   agents,
-  onClick,
+  messages,
+  isExpanded,
+  onToggle,
 }: {
   conversation: ConversationGroup;
   agents: AgentInfo[];
-  onClick: () => void;
+  messages: TranscriptMessage[];
+  isExpanded: boolean;
+  onToggle: () => void;
 }) {
   const spawnedAgents = agents.filter((a) =>
     conversation.spawnedAgentIds.includes(a.agent_id)
   );
 
   return (
-    <button className="worklog-entry compacted" onClick={onClick} type="button">
-      <div className="worklog-entry-header">
+    <div className={`worklog-entry compacted${isExpanded ? " expanded" : ""}`}>
+      <button className="worklog-entry-header" onClick={onToggle} type="button">
         <span className="worklog-entry-time">{conversation.startTimestamp}</span>
         <span className="worklog-entry-summary">{conversation.summary}</span>
-      </div>
+        <span className="worklog-expand-indicator">{isExpanded ? "▲" : "▼"}</span>
+      </button>
       {spawnedAgents.length > 0 && (
         <div className="worklog-entry-agents">
           {spawnedAgents.map((a) => (
@@ -49,10 +58,16 @@ function CompactedEntry({
           ))}
         </div>
       )}
-    </button>
+      {isExpanded && messages.length > 0 && (
+        <div className="worklog-entry-inline-transcript">
+          <GroupedTranscript messages={messages} githubRepo={null} hideToolCalls={true} />
+        </div>
+      )}
+    </div>
   );
 }
 
+/** The currently focused conversation — fully expanded with messages. */
 function ActiveConversation({
   conversation,
   messages,
@@ -61,17 +76,47 @@ function ActiveConversation({
   messages: TranscriptMessage[];
 }) {
   return (
-    <div className="worklog-entry active">
+    <div className="worklog-entry active focused">
       <div className="worklog-entry-header">
         <span className="worklog-entry-time">{conversation.startTimestamp}</span>
         <span className="worklog-entry-live-badge">live</span>
       </div>
       {messages.length > 0 && (
         <div className="worklog-entry-transcript">
-          <GroupedTranscript messages={messages} githubRepo={null} />
+          <GroupedTranscript messages={messages} githubRepo={null} hideToolCalls={true} />
         </div>
       )}
     </div>
+  );
+}
+
+/** A live conversation that isn't focused — collapsed, clickable to switch. */
+function CollapsedLiveEntry({
+  conversation,
+  messageCount,
+  onClick,
+}: {
+  conversation: ConversationGroup;
+  messageCount: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="worklog-entry active collapsed"
+      onClick={onClick}
+      type="button"
+    >
+      <div className="worklog-entry-header">
+        <span className="worklog-entry-time">{conversation.startTimestamp}</span>
+        <span className="worklog-entry-live-badge">live</span>
+        {messageCount > 0 && (
+          <span className="worklog-entry-msg-count">
+            {messageCount} message{messageCount !== 1 ? "s" : ""}
+          </span>
+        )}
+        <span className="worklog-expand-indicator">▼</span>
+      </div>
+    </button>
   );
 }
 
@@ -79,18 +124,21 @@ export function WorkLogView({
   conversations,
   transcript,
   agents,
-  onSelectConversation,
+  activeConversationId,
+  expandedConversationIds,
+  onToggleExpand,
+  onSwitchConversation,
+  onNewConversation,
 }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
 
-  const activeConv = conversations.find((c) => c.status === "active");
+  const focusedConv = conversations.find((c) => c.id === activeConversationId);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [
     conversations.length,
-    activeConv?.messageEndIndex,
-    activeConv?.status,
+    focusedConv?.messageEndIndex,
   ]);
 
   // Messages that exist before any conversation (intro, etc.)
@@ -101,39 +149,64 @@ export function WorkLogView({
     <div className="worklog">
       <div className="worklog-toolbar">
         <div className="worklog-title">work log</div>
+        <button
+          className="worklog-new-btn"
+          onClick={onNewConversation}
+          type="button"
+          title="Start a new request"
+        >
+          + new request
+        </button>
       </div>
       {preConvMessages.length > 0 && (
         <div className="worklog-preamble">
-          {preConvMessages.map((msg, i) => (
+          {preConvMessages.filter((msg) => msg.kind !== "tool_use").map((msg, i) => (
             <TranscriptEntry key={i} message={msg} githubRepo={null} />
           ))}
         </div>
       )}
       {conversations.map((conv) => {
+        const messages = transcript.slice(
+          conv.messageStartIndex,
+          conv.messageEndIndex + 1
+        );
+
         if (conv.status === "compacted") {
           return (
             <CompactedEntry
               key={conv.id}
               conversation={conv}
               agents={agents}
-              onClick={() => onSelectConversation(conv.id)}
+              messages={messages}
+              isExpanded={expandedConversationIds.includes(conv.id)}
+              onToggle={() => onToggleExpand(conv.id)}
             />
           );
         }
-        const messages = transcript.slice(
-          conv.messageStartIndex,
-          conv.messageEndIndex + 1
-        );
+
+        // Active (live) conversation
+        if (conv.id === activeConversationId) {
+          return (
+            <ActiveConversation
+              key={conv.id}
+              conversation={conv}
+              messages={messages}
+            />
+          );
+        }
+
+        // Live but not focused — show collapsed
         return (
-          <ActiveConversation
+          <CollapsedLiveEntry
             key={conv.id}
             conversation={conv}
-            messages={messages}
+            messageCount={messages.filter((m) => m.role !== "system").length}
+            onClick={() => onSwitchConversation(conv.id)}
           />
         );
       })}
       {conversations.length === 0 && preConvMessages.length === 0 && (
-        <div className="worklog-empty">Press space to start a conversation.</div>
+        <div className="worklog-empty">Ready whenever you are</div>
       )}
       <div ref={endRef} />
     </div>

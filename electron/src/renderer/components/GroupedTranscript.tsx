@@ -55,13 +55,15 @@ function groupTranscript(messages: TranscriptMessage[]): TranscriptItem[] {
 interface Props {
   messages: TranscriptMessage[];
   githubRepo: string | null;
+  hideToolCalls?: boolean;
 }
 
-export function GroupedTranscript({ messages, githubRepo }: Props) {
+export function GroupedTranscript({ messages, githubRepo, hideToolCalls = false }: Props) {
   const [expandedStacks, setExpandedStacks] = useState<Record<string, boolean>>(
     {}
   );
-  const transcriptItems = groupTranscript(messages);
+  const visibleMessages = hideToolCalls ? messages.filter((m) => m.kind !== "tool_use") : messages;
+  const transcriptItems = groupTranscript(visibleMessages);
 
   function toggleStack(key: string) {
     setExpandedStacks((current) => ({ ...current, [key]: !current[key] }));
