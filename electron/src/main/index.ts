@@ -5,6 +5,7 @@ import { ConversationManager } from "./conversation-manager";
 
 let mainWindow: BrowserWindow | null = null;
 let conversationManager: ConversationManager | null = null;
+console.log("[status-check] app initializing");
 const DEV_SERVER_URL = "http://localhost:5173";
 
 function findGitRoot(startDir: string): string | null {
