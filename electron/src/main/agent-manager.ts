@@ -374,6 +374,7 @@ export interface AgentInstance {
   events: Record<string, any>[];
   taskQueue: string[];
   branch: string | null;
+  prUrl: string | null;
   number: number;
   pendingQuestion: string | null;
 }
@@ -471,6 +472,7 @@ export class AgentManager {
       events: [],
       taskQueue: [],
       branch: null,
+      prUrl: null,
       number: this._counter,
       pendingQuestion: null,
     };
@@ -508,7 +510,13 @@ export class AgentManager {
           branch = commitAndPush(agent);
           agent.branch = branch;
         }
-        agent.status = branch ? "pr_pending" : "done";
+        if (branch) {
+          const prUrl = createPr(agent, branch);
+          agent.prUrl = prUrl;
+          agent.status = "done";
+        } else {
+          agent.status = "done";
+        }
       }
     } catch (e) {
       agent.status = "error";
@@ -517,7 +525,7 @@ export class AgentManager {
       if (onDone) {
         try { onDone(agent.id); } catch {}
       }
-      if (!agent.remote && !["pr_pending", "needs_input"].includes(agent.status) && agent.worktreePath) {
+      if (!agent.remote && !["needs_input"].includes(agent.status) && agent.worktreePath) {
         cleanupWorktree(agent.baseCwd, agent.worktreePath);
       }
     }

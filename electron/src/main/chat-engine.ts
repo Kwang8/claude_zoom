@@ -796,13 +796,12 @@ export class ChatEngine {
         try { this._spawnSub(name, agentTask); } catch {}
       }
       if (response.report) this._speakTLReport(response.report);
-      if (agent.status === "pr_pending" && agent.branch) {
+      if (agent.prUrl) {
         const prMsg = response.report
-          ? `${response.report} Changes are on branch ${agent.branch}. Want me to open a PR?`
-          : `Agent ${agent.name} made changes on branch ${agent.branch}. Want me to open a PR?`;
-        this._speechQueue.put("tech lead", prMsg, {
-          requiresResponse: true, agentId: agent.id, questionType: "pr",
-        });
+          ? `${response.report} PR created: ${agent.prUrl}`
+          : `Agent ${agent.name} finished. PR created: ${agent.prUrl}`;
+        this._sendTranscript("claude", prMsg);
+        this._speak(prMsg);
       }
     }).catch((e) => {
       console.error(`[tl] review error for ${agent.name}:`, e);
