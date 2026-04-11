@@ -99,13 +99,25 @@ const STATUS_LABELS: Record<string, { label: string; className: string }> = {
   active: { label: "live", className: "status-active" },
 };
 
+/** Derive a short summary from the first user message in a conversation. */
+function deriveSummary(conversation: ConversationGroup, transcript: TranscriptMessage[]): string | null {
+  if (conversation.summary) return conversation.summary;
+  const messages = transcript.slice(conversation.messageStartIndex, conversation.messageEndIndex + 1);
+  const firstUserMsg = messages.find((m) => m.role === "user");
+  if (!firstUserMsg) return null;
+  const text = firstUserMsg.text.trim();
+  return text.length > 80 ? text.slice(0, 77) + "..." : text;
+}
+
 /** A non-focused conversation — collapsed with status badge, clickable to switch. */
 function CollapsedEntry({
   conversation,
+  summary,
   onClick,
   onMerge,
 }: {
   conversation: ConversationGroup;
+  summary: string | null;
   onClick: () => void;
   onMerge?: () => void;
 }) {
@@ -121,6 +133,9 @@ function CollapsedEntry({
         )}
         <span className="worklog-expand-indicator">▼</span>
       </button>
+      {summary && (
+        <div className="worklog-entry-summary-line">{summary}</div>
+      )}
       {conversation.status === "pr_open" && conversation.prUrl && (
         <div className="worklog-pr-actions">
           <a
@@ -209,8 +224,8 @@ export function WorkLogView({
           );
         }
 
-        // Focused conversation — fully expanded
-        if (conv.id === activeConversationId && conv.status === "active") {
+        // Focused conversation — fully expanded regardless of status
+        if (conv.id === activeConversationId) {
           return (
             <ActiveConversation
               key={conv.id}
@@ -225,6 +240,7 @@ export function WorkLogView({
           <CollapsedEntry
             key={conv.id}
             conversation={conv}
+            summary={deriveSummary(conv, transcript)}
             onClick={() => onSwitchConversation(conv.id)}
             onMerge={conv.status === "pr_open" ? () => onMergePr(conv.id) : undefined}
           />

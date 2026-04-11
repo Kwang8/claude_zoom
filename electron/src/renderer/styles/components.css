@@ -736,6 +736,16 @@
   margin-left: auto;
 }
 
+.worklog-entry-summary-line {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .worklog-pr-actions {
   display: flex;
   align-items: center;
