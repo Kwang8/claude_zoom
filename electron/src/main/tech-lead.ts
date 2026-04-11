@@ -1,5 +1,6 @@
 import { ClaudeSession } from "./claude-session";
 import { extractFinalText } from "./narrator";
+import { ContextTree } from "./context-tree";
 
 // ── TL System Prompt ──
 
@@ -12,9 +13,14 @@ YOUR ROLE:
 - Analyze tasks and decompose them into focused sub-agent work items
 - Provide each sub-agent with FULL context: file paths, function names, expected \
   behavior, relevant code patterns — so they can work independently without asking
-- Answer sub-agent questions from your knowledge of the task decomposition
+- Answer sub-agent questions using the CONTEXT TREE provided in each message — \
+  it contains the full state of all tasks, agents, and their Q&A history
 - Review sub-agent results for correctness and completeness
 - Report outcomes back to the Engineering Manager for the user
+
+Every message you receive will start with a [CONTEXT TREE] block showing all \
+active/completed tasks, their agents, statuses, results, and any Q&A exchanges. \
+Use this as your source of truth — do not rely on memory alone.
 
 OUTPUT FORMAT — use these XML blocks in your responses:
 
@@ -25,7 +31,7 @@ expected outcomes. The agent should be able to complete this without further con
 </SPAWN>
 
 To answer a sub-agent question:
-<ANSWER>Your answer based on the task context you have</ANSWER>
+<ANSWER>Your answer based on the context tree and task knowledge</ANSWER>
 
 To escalate a question to the user (ONLY when you truly cannot answer):
 <ESCALATE>The specific question for the user, with brief context about why</ESCALATE>
@@ -44,6 +50,8 @@ To report final results to the EM (for speaking to the user):
 keep it under 3 sentences</REPORT>
 
 RULES:
+- Always consult the CONTEXT TREE before answering sub-agent questions — \
+  the answer is often already there from a prior task or agent result
 - Always try to answer sub-agent questions yourself before escalating
 - When spawning, give MAXIMUM context — the agent works in an isolated worktree \
   and cannot ask you clarifying questions easily
@@ -110,6 +118,7 @@ export function parseTLText(text: string): TLResponse {
 
 export class TechLead {
   private _session: ClaudeSession;
+  contextTree: ContextTree;
 
   constructor(cwd: string, permissionMode: string = "bypassPermissions") {
     this._session = new ClaudeSession({
@@ -118,6 +127,7 @@ export class TechLead {
       permissionMode,
       appendSystemPrompt: TL_SYSTEM_PROMPT,
     });
+    this.contextTree = new ContextTree();
   }
 
   get sessionId(): string | null {
@@ -129,50 +139,67 @@ export class TechLead {
   }
 
   async delegateTask(task: string): Promise<TLResponse> {
-    const events = await this._collect(task);
+    this.contextTree.addTask(task);
+    const prompt = this._withContext(task);
+    const events = await this._collect(prompt);
     return parseTLResponse(events);
   }
 
   async handleAgentQuestion(
     agentName: string,
+    agentId: string,
     question: string,
     taskContext: string
   ): Promise<TLResponse> {
-    const prompt =
-      `Sub-agent "${agentName}" has a question while working on: ${taskContext}\n\n` +
+    this.contextTree.addAgentQuestion(agentId, question);
+    const prompt = this._withContext(
+      `Sub-agent "${agentName}" (${agentId}) has a question while working on: ${taskContext}\n\n` +
       `Question: ${question}\n\n` +
-      `Answer from your knowledge of the task. If you truly need user input, use <ESCALATE>.`;
+      `Check the context tree for relevant information. Answer from your knowledge ` +
+      `of the task. If you truly need user input, use <ESCALATE>.`
+    );
     const events = await this._collect(prompt);
     return parseTLResponse(events);
   }
 
   async reviewResult(
     agentName: string,
+    agentId: string,
     task: string,
     summary: string
   ): Promise<TLResponse> {
-    const prompt =
-      `Sub-agent "${agentName}" completed its task.\n` +
+    this.contextTree.setAgentResult(agentId, summary);
+    this.contextTree.checkTaskCompletion();
+    const prompt = this._withContext(
+      `Sub-agent "${agentName}" (${agentId}) completed its task.\n` +
       `Task: ${task}\n` +
       `Result: ${summary}\n\n` +
       `Review this result. If satisfactory, <APPROVE> and <REPORT> to the EM. ` +
-      `If it needs fixes, use <FIX>. If follow-up work is needed, use <SPAWN>.`;
+      `If it needs fixes, use <FIX>. If follow-up work is needed, use <SPAWN>.`
+    );
     const events = await this._collect(prompt);
     return parseTLResponse(events);
   }
 
-  async forwardUserAnswer(question: string, answer: string): Promise<TLResponse> {
-    const prompt =
+  async forwardUserAnswer(question: string, answer: string, agentId: string | null): Promise<TLResponse> {
+    if (agentId) this.contextTree.addAgentAnswer(agentId, answer);
+    const prompt = this._withContext(
       `The user answered your escalated question.\n` +
       `Question was: ${question}\n` +
       `Answer: ${answer}\n\n` +
-      `Continue with this information. Provide an <ANSWER> for the waiting sub-agent.`;
+      `Continue with this information. Provide an <ANSWER> for the waiting sub-agent.`
+    );
     const events = await this._collect(prompt);
     return parseTLResponse(events);
   }
 
   cancel(): void {
     this._session.cancel();
+  }
+
+  /** Prepend the serialized context tree to a prompt. */
+  private _withContext(prompt: string): string {
+    return `[CONTEXT TREE]\n${this.contextTree.serialize()}\n[/CONTEXT TREE]\n\n${prompt}`;
   }
 
   private async _collect(prompt: string): Promise<Record<string, any>[]> {
