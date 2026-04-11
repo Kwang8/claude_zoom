@@ -7,16 +7,11 @@ import { WorkLogView } from "./components/WorkLogView";
 import { useAppState } from "./hooks/useAppState";
 import { useIPC } from "./hooks/useIPC";
 
-type MainView =
-  | { mode: "worklog" }
-  | { mode: "conversation_detail"; conversationId: string };
-
 export function App() {
-  const { state, handleMessage, clearHistory } = useAppState();
+  const { state, handleMessage, toggleConversationExpand, clearHistory } = useAppState();
   const { send, connected } = useIPC(handleMessage);
   const [isRecording, setIsRecording] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [mainView, setMainView] = useState<MainView>({ mode: "worklog" });
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -34,15 +29,12 @@ export function App() {
         e.preventDefault();
         if (e.repeat) return;
         setSelectedAgentId(null);
-        setMainView({ mode: "worklog" });
         console.log("[app] space pressed, sending mic_start");
         setIsRecording(true);
         send({ type: "mic_start" });
       } else if (e.code === "Escape") {
         e.preventDefault();
-        if (mainView.mode === "conversation_detail") {
-          setMainView({ mode: "worklog" });
-        } else if (selectedAgentId) {
+        if (selectedAgentId) {
           setSelectedAgentId(null);
         } else {
           send({ type: "cancel_turn" });
@@ -69,7 +61,7 @@ export function App() {
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("keyup", onKeyUp, true);
     };
-  }, [send, mainView, selectedAgentId]);
+  }, [send, selectedAgentId]);
 
   const handleDeleteAgent = useCallback(
     (agentId: string) => {
@@ -78,31 +70,28 @@ export function App() {
     [send]
   );
 
+  const handleNewConversation = useCallback(() => {
+    send({ type: "create_conversation" });
+  }, [send]);
+
+  const handleSwitchConversation = useCallback((id: string) => {
+    send({ type: "switch_conversation", conversation_id: id });
+  }, [send]);
+
   useEffect(() => {
     if (selectedAgentId && !state.agents.some((agent) => agent.agent_id === selectedAgentId)) {
       setSelectedAgentId(null);
     }
   }, [selectedAgentId, state.agents]);
 
-  // Conversation detail view
-  const selectedConversation = mainView.mode === "conversation_detail"
-    ? state.conversations.find((c) => c.id === mainView.conversationId)
-    : null;
+  const selectedAgent = state.agents.find((agent) => agent.agent_id === selectedAgentId) ?? null;
+  const agentTranscript = useMemo(
+    () => selectedAgent
+      ? state.transcript.filter((m) => m.agent_id === selectedAgent.agent_id)
+      : [],
+    [selectedAgent, state.transcript]
+  );
 
-  const conversationMessages = useMemo(() => {
-    if (!selectedConversation) return [];
-    return state.transcript.slice(
-      selectedConversation.messageStartIndex,
-      selectedConversation.messageEndIndex + 1
-    );
-  }, [selectedConversation, state.transcript]);
-
-  const selectedAgent = state.agents.find((agent) => agent.agent_id === selectedAgentId) || null;
-  const agentTranscript = selectedAgent
-    ? state.transcript.filter((message) => message.agent_id === selectedAgent.agent_id)
-    : state.transcript.filter((message) => message.kind !== "tool_use");
-
-  // Determine what main area shows
   let mainContent: React.ReactNode;
   if (selectedAgent) {
     mainContent = (
@@ -113,25 +102,17 @@ export function App() {
         githubRepo={state.githubRepo}
       />
     );
-  } else if (selectedConversation) {
-    mainContent = (
-      <TranscriptView
-        messages={conversationMessages}
-        selectedAgent={null}
-        onBackToMain={() => setMainView({ mode: "worklog" })}
-        title={selectedConversation.summary || "Conversation"}
-        githubRepo={state.githubRepo}
-      />
-    );
   } else {
     mainContent = (
       <WorkLogView
         conversations={state.conversations}
         transcript={state.transcript}
         agents={state.agents}
-        onSelectConversation={(id) =>
-          setMainView({ mode: "conversation_detail", conversationId: id })
-        }
+        activeConversationId={state.activeConversationId}
+        expandedConversationIds={state.expandedConversationIds}
+        onToggleExpand={toggleConversationExpand}
+        onSwitchConversation={handleSwitchConversation}
+        onNewConversation={handleNewConversation}
       />
     );
   }

@@ -134,16 +134,6 @@ async function createWindow() {
         type: "conversation_switched",
         conversation_id: targetId,
       });
-      // Replay state for the newly active conversation
-      engine.replayState();
-      const repo = engine.githubRepo;
-      if (repo) {
-        mainWindow?.webContents.send("engine-event", {
-          type: "repo_context",
-          repo,
-          conversation_id: targetId,
-        });
-      }
       return;
     }
 

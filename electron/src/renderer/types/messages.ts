@@ -10,6 +10,8 @@ export type ClientMessage =
   | { type: "kill_agent"; agent_id: string }
   | { type: "attach_image"; path: string }
   | { type: "clear_images" }
+  | { type: "create_conversation" }
+  | { type: "switch_conversation"; conversation_id: string }
   | { type: "quit" };
 
 // ── Server -> Client ──
@@ -83,4 +85,6 @@ export type ServerMessage =
   | { type: "repo_context"; repo: string }
   | { type: "conversation_start"; conversation_id: string; timestamp: string }
   | { type: "conversation_compacted"; conversation_id: string; summary: string; timestamp: string }
-  | { type: "conversation_agent_spawned"; conversation_id: string; agent_id: string };
+  | { type: "conversation_agent_spawned"; conversation_id: string; agent_id: string }
+  | { type: "conversation_created"; conversation_id: string; timestamp: string }
+  | { type: "conversation_switched"; conversation_id: string };
