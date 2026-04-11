@@ -12,7 +12,7 @@ type MainView =
   | { mode: "conversation_detail"; conversationId: string };
 
 export function App() {
-  const { state, handleMessage } = useAppState();
+  const { state, handleMessage, clearHistory } = useAppState();
   const { send, connected } = useIPC(handleMessage);
   const [isRecording, setIsRecording] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -138,7 +138,10 @@ export function App() {
 
   return (
     <div className="app">
-      <div className="titlebar">claude_zoom</div>
+      <div className="titlebar">
+        claude_zoom
+        <button className="clear-btn" onClick={clearHistory}>Clear</button>
+      </div>
       <div className="body">
         <Sidebar
           appState={state.appState}

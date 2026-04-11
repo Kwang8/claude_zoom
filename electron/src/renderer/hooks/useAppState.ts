@@ -37,11 +37,16 @@ const initialState: State = {
 
 type Action =
   | { type: "SERVER_MESSAGE"; msg: ServerMessage }
-  | { type: "SET_CONNECTED"; connected: boolean };
+  | { type: "SET_CONNECTED"; connected: boolean }
+  | { type: "CLEAR_HISTORY" };
 
 function reducer(state: State, action: Action): State {
   if (action.type === "SET_CONNECTED") {
     return { ...state, connected: action.connected };
+  }
+
+  if (action.type === "CLEAR_HISTORY") {
+    return { ...state, transcript: [], conversations: [] };
   }
 
   const msg = action.msg;
@@ -192,5 +197,9 @@ export function useAppState() {
     dispatch({ type: "SET_CONNECTED", connected });
   }, []);
 
-  return { state, handleMessage, setConnected };
+  const clearHistory = useCallback(() => {
+    dispatch({ type: "CLEAR_HISTORY" });
+  }, []);
+
+  return { state, handleMessage, setConnected, clearHistory };
 }
