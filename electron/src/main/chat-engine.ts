@@ -834,6 +834,10 @@ export class ChatEngine {
           this._unreadCount++;
         }
       }
+      // Only check completion after TL has had a chance to spawn follow-ups
+      if (!response.spawns.length && !response.fixes.length) {
+        this._checkAllAgentsDone();
+      }
     }).catch((e) => {
       console.error(`[tl] review error for ${agent.name}:`, e);
       this._speechQueue.put(agent.name, summary);
@@ -1055,8 +1059,8 @@ export class ChatEngine {
       this._emitConvStatus("needs_input", `${agent.name} needs input`);
       this._handleTLQuestionFromAgent(agentId, agent.name, agent.pendingQuestion, agent.task);
     } else if (agent.status === "done" || agent.status === "pr_pending") {
+      // TL reviews result — may spawn follow-ups. Check completion AFTER review.
       this._submitResultToTL(agent);
-      this._checkAllAgentsDone();
     } else if (agent.status === "error") {
       const errMsg = agent.pendingQuestion || "Unknown error";
       this._speechQueue.put(agent.name, `Error: ${errMsg}`, { agentId: agent.id });
