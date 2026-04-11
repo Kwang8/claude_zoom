@@ -59,9 +59,8 @@ function reducer(state: State, action: Action): State {
     const isExpanded = state.expandedConversationIds.includes(conversationId);
     return {
       ...state,
-      expandedConversationIds: isExpanded
-        ? state.expandedConversationIds.filter((id) => id !== conversationId)
-        : [...state.expandedConversationIds, conversationId],
+      // Accordion: only one expanded at a time
+      expandedConversationIds: isExpanded ? [] : [conversationId],
     };
   }
 
