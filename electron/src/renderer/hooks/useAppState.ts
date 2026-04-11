@@ -13,6 +13,8 @@ export interface State {
   transcript: TranscriptMessage[];
   agents: AgentInfo[];
   conversations: ConversationGroup[];
+  activeConversationId: string | null;
+  expandedConversationIds: string[];
   ticker: string;
   progress: string;
   action: string;
@@ -27,6 +29,8 @@ const initialState: State = {
   transcript: [],
   agents: [],
   conversations: [],
+  activeConversationId: null,
+  expandedConversationIds: [],
   ticker: "",
   progress: "ready",
   action: "connecting...",
@@ -38,6 +42,7 @@ const initialState: State = {
 type Action =
   | { type: "SERVER_MESSAGE"; msg: ServerMessage }
   | { type: "SET_CONNECTED"; connected: boolean }
+  | { type: "TOGGLE_CONVERSATION_EXPAND"; conversationId: string }
   | { type: "CLEAR_HISTORY" };
 
 function reducer(state: State, action: Action): State {
@@ -46,7 +51,18 @@ function reducer(state: State, action: Action): State {
   }
 
   if (action.type === "CLEAR_HISTORY") {
-    return { ...state, transcript: [], conversations: [] };
+    return { ...state, transcript: [], conversations: [], expandedConversationIds: [] };
+  }
+
+  if (action.type === "TOGGLE_CONVERSATION_EXPAND") {
+    const { conversationId } = action;
+    const isExpanded = state.expandedConversationIds.includes(conversationId);
+    return {
+      ...state,
+      expandedConversationIds: isExpanded
+        ? state.expandedConversationIds.filter((id) => id !== conversationId)
+        : [...state.expandedConversationIds, conversationId],
+    };
   }
 
   const msg = action.msg;
@@ -147,7 +163,11 @@ function reducer(state: State, action: Action): State {
     case "repo_context":
       return { ...state, githubRepo: msg.repo };
 
-    case "conversation_start": {
+    case "conversation_start":
+    case "conversation_created": {
+      if (state.conversations.some((c) => c.id === msg.conversation_id)) {
+        return state;
+      }
       const newConv: ConversationGroup = {
         id: msg.conversation_id,
         status: "active",
@@ -158,8 +178,15 @@ function reducer(state: State, action: Action): State {
         messageEndIndex: state.transcript.length,
         spawnedAgentIds: [],
       };
-      return { ...state, conversations: [...state.conversations, newConv] };
+      return {
+        ...state,
+        conversations: [...state.conversations, newConv],
+        activeConversationId: msg.conversation_id,
+      };
     }
+
+    case "conversation_switched":
+      return { ...state, activeConversationId: msg.conversation_id };
 
     case "conversation_compacted":
       return {
@@ -197,9 +224,13 @@ export function useAppState() {
     dispatch({ type: "SET_CONNECTED", connected });
   }, []);
 
+  const toggleConversationExpand = useCallback((conversationId: string) => {
+    dispatch({ type: "TOGGLE_CONVERSATION_EXPAND", conversationId });
+  }, []);
+
   const clearHistory = useCallback(() => {
     dispatch({ type: "CLEAR_HISTORY" });
   }, []);
 
-  return { state, handleMessage, setConnected, clearHistory };
+  return { state, handleMessage, setConnected, toggleConversationExpand, clearHistory };
 }
