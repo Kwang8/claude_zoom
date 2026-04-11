@@ -23,9 +23,9 @@ export function AvatarPanel({ state, narration, selected = false, onClick }: Pro
       style={onClick ? { cursor: "pointer" } : undefined}
     >
       <div className={`avatar-orb ${state}`}>
-        <span style={{ fontSize: 20, color: "#fff" }}>EM</span>
+        <span style={{ fontSize: 20, color: "#fff" }}>TL</span>
       </div>
-      <div className="avatar-label">Engineering Manager</div>
+      <div className="avatar-label">Tech Lead</div>
       <div className="avatar-state">{STATE_LABELS[state]}</div>
       {narration && (
         <div
