@@ -249,6 +249,7 @@ async function loadDevRenderer(window: BrowserWindow): Promise<void> {
   throw lastError instanceof Error ? lastError : new Error("Failed to load Vite dev server");
 }
 
+console.log("[main] app starting up");
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {
