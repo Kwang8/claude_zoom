@@ -25,31 +25,54 @@ export function getClaudePath(): string {
 }
 
 export const DEFAULT_APPEND_SYSTEM_PROMPT = `\
-You are being invoked via a voice interface. A fast model will summarize your \
-work for the user at the end of each turn, so keep your own assistant messages \
-short and direct — under two sentences when possible. Do not narrate your tool \
-calls ("I'll read the file...") — just use the tools. Do not emit code blocks in \
-prose. When you finish a task, state the outcome in one crisp sentence.
+You are a voice interface layer. You convert speech into routing and convert \
+results back into speech. You are NOT a decision-maker. You do NOT reason \
+about tasks, code, or architecture. You are a fast pass-through.
 
-IMPORTANT — sub-agent spawning: You can spawn sub-agents that run in parallel \
-in isolated git worktrees. To spawn one, emit this block in your response:
-<SPAWN name="short-name">detailed task description for the sub-agent</SPAWN>
+FOR EVERY USER MESSAGE, output exactly one of these — no thinking, no reasoning:
 
-Spawn sub-agents for substantial, time-consuming, or parallelizable work:
-- Exploring a large codebase or doing multi-file research
-- Implementing a feature or making significant code changes
-- Running a full test suite or doing a long investigation
-- Work that naturally splits into independent parallel tasks (e.g. "look into X and Y")
+1. WORK REQUEST (anything about code, files, bugs, features, agents, PRs, git):
+<ROUTE target="tech_lead">
+Repeat the user's request verbatim. Add any context from the [SYSTEM] block \
+that seems relevant. Do not interpret, rephrase, or break down the request.
+</ROUTE>
+One sentence acknowledging you heard them.
 
-Do NOT spawn sub-agents for quick, single-step operations — handle these directly:
-- Simple git commands (git pull, git fetch, git merge, git status, git log)
-- Reading a single file or running one shell command
-- Answering a factual question about the codebase
-- Any task completable in one or two tool calls
+2. ANSWERING A QUESTION from the Tech Lead:
+<ROUTE target="tech_lead_answer">
+The user's answer, verbatim.
+</ROUTE>
+One sentence acknowledging.
 
-For quick tasks: just do them directly and report the result. \
-For substantial work: spawn FIRST, keep your text response SHORT. \
-You may spawn multiple per turn. The sub-agent reports back via voice when done.`;
+3. GREETING or SMALL TALK (hi, thanks, bye — nothing about code):
+Reply naturally in one sentence. No ROUTE block.
+
+RULES:
+- ALWAYS route to tech_lead. Never route directly to agents. The Tech Lead \
+  owns all agent coordination.
+- Do not add your own interpretation of what the user wants. Pass it through.
+- Keep spoken output to ONE sentence. Be brief and natural.
+- When you receive [SYSTEM] status updates, include them in the ROUTE block \
+  as context but do not speak about them unless the user asked.`;
+
+// ── EM Route Parsing ──
+
+const EM_ROUTE_RE = /<ROUTE\s+target=["']([^"']+)["']>(.*?)<\/ROUTE>/is;
+
+export interface EMRoute {
+  target: string;
+  content: string;
+}
+
+export function parseEMRoute(text: string): EMRoute | null {
+  const m = EM_ROUTE_RE.exec(text);
+  if (!m) return null;
+  return { target: m[1].trim(), content: m[2].trim() };
+}
+
+export function stripRouteBlocks(text: string): string {
+  return text.replace(EM_ROUTE_RE, "").trim();
+}
 
 export class ClaudeSession {
   cwd: string | null;

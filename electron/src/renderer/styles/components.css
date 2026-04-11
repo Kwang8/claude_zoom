@@ -357,14 +357,16 @@
   font-style: italic;
 }
 
-.pr-link {
+.pr-link,
+.hyperlink {
   color: #00d4ff;
   text-decoration: none;
   border-bottom: 1px solid rgba(0, 212, 255, 0.4);
   cursor: pointer;
 }
 
-.pr-link:hover {
+.pr-link:hover,
+.hyperlink:hover {
   border-bottom-color: #00d4ff;
 }
 

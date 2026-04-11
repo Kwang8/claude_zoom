@@ -2,7 +2,6 @@ import { execFile, execFileSync } from "child_process";
 import path from "path";
 import { ClaudeSession } from "./claude-session";
 import { RemoteClaudeSession } from "./remote-session";
-import { summarizeTurn } from "./narrator";
 
 // ── Voice trigger detection ──
 
@@ -503,41 +502,17 @@ export class AgentManager {
       if (question) {
         agent.pendingQuestion = question;
         agent.status = "needs_input";
-        this.speechQueue.put(agentLabel(agent), `I have a question: ${question}`, {
-          requiresResponse: true,
-          agentId: agent.id,
-          questionType: "agent_question",
-        });
       } else {
         let branch: string | null = null;
         if (!agent.remote && agent.worktreePath && hasChanges(agent.worktreePath)) {
           branch = commitAndPush(agent);
           agent.branch = branch;
         }
-
-        let summary: string;
-        try {
-          summary = await summarizeTurn(agent.task, agent.events);
-        } catch (e) {
-          summary = `Agent ${agent.name} hit a summarize error: ${e}`;
-        }
-        if (!summary) summary = "Done.";
-
-        if (branch) {
-          agent.status = "pr_pending";
-          this.speechQueue.put(
-            agentLabel(agent),
-            `${summary} I made changes and pushed branch ${branch}. Want me to open a PR?`,
-            { requiresResponse: true, agentId: agent.id, questionType: "pr" }
-          );
-        } else {
-          agent.status = "done";
-          this.speechQueue.put(agentLabel(agent), summary, { agentId: agent.id });
-        }
+        agent.status = branch ? "pr_pending" : "done";
       }
     } catch (e) {
       agent.status = "error";
-      this.speechQueue.put(agentLabel(agent), `Error: ${e}`, { agentId: agent.id });
+      agent.pendingQuestion = `Error: ${e}`;
     } finally {
       if (onDone) {
         try { onDone(agent.id); } catch {}
@@ -561,14 +536,6 @@ export class AgentManager {
           if (onEvent) { try { onEvent(agent.id, event); } catch {} }
         }
         agent.status = "done";
-        let summary: string;
-        try {
-          summary = await summarizeTurn(nextTask, agent.events);
-        } catch (e) {
-          summary = `Agent ${agent.name} hit a summarize error: ${e}`;
-        }
-        if (!summary) summary = "Done.";
-        this.speechQueue.put(agentLabel(agent), summary, { agentId: agent.id });
       } catch (e) {
         agent.status = "error";
         this.speechQueue.put(agentLabel(agent), `Error: ${e}`, { agentId: agent.id });

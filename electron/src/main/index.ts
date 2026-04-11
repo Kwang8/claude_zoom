@@ -1,11 +1,10 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import fs from "fs";
 import path from "path";
-import { ClaudeSession } from "./claude-session";
-import { ChatEngine } from "./chat-engine";
+import { ConversationManager } from "./conversation-manager";
 
 let mainWindow: BrowserWindow | null = null;
-let engine: ChatEngine | null = null;
+let conversationManager: ConversationManager | null = null;
 const DEV_SERVER_URL = "http://localhost:5173";
 
 function findGitRoot(startDir: string): string | null {
@@ -87,34 +86,86 @@ async function createWindow() {
     mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   }
 
-  // Create the chat engine
-  const session = new ClaudeSession({
-    cwd: targetCwd,
-    model: "opus",
-    permissionMode: "acceptEdits",
-    tools: "",
-  });
-
-  engine = new ChatEngine(session, {
-    onEmit: (msg) => {
-      try {
-        mainWindow?.webContents.send("engine-event", msg);
-      } catch {}
-    },
+  // Build the conversation manager — each engine's events are tagged with their conversation ID
+  conversationManager = new ConversationManager({
+    targetCwd,
     remoteRepo: process.env.CLAUDE_ZOOM_REMOTE_REPO || null,
     remoteAuth: process.env.CLAUDE_ZOOM_REMOTE_AUTH === "api-key" ? "api-key" : "oauth",
+    onEmit: (conversationId, msg) => {
+      try {
+        mainWindow?.webContents.send("engine-event", { ...msg, conversation_id: conversationId });
+      } catch {}
+    },
   });
+
+  // Restore existing conversations from registry, or create the first one
+  conversationManager.restoreFromRegistry();
+  if (conversationManager.listConversations().length === 0) {
+    const firstId = conversationManager.createConversation();
+    conversationManager.setActive(firstId);
+  }
 
   // Handle commands from the renderer
   ipcMain.on("engine-command", (_event, msg: Record<string, any>) => {
-    if (!engine) return;
+    if (!conversationManager) return;
     const msgType = msg.type || "";
+
+    // ── Conversation management commands ──
+    if (msgType === "create_conversation") {
+      const id = conversationManager.createConversation();
+      conversationManager.getConversation(id)!.start().then(() => {
+        mainWindow?.webContents.send("engine-event", {
+          type: "conversation_created",
+          conversation_id: id,
+        });
+        console.log("[main] new conversation started:", id);
+      }).catch((err) => {
+        console.error("[main] failed to start new conversation:", err);
+      });
+      return;
+    }
+
+    if (msgType === "switch_conversation") {
+      const targetId = msg.conversation_id || "";
+      const engine = conversationManager.getConversation(targetId);
+      if (!engine) return;
+      conversationManager.setActive(targetId);
+      mainWindow?.webContents.send("engine-event", {
+        type: "conversation_switched",
+        conversation_id: targetId,
+      });
+      // Replay state for the newly active conversation
+      engine.replayState();
+      const repo = engine.githubRepo;
+      if (repo) {
+        mainWindow?.webContents.send("engine-event", {
+          type: "repo_context",
+          repo,
+          conversation_id: targetId,
+        });
+      }
+      return;
+    }
+
+    if (msgType === "list_conversations") {
+      mainWindow?.webContents.send("engine-event", {
+        type: "conversations_list",
+        conversations: conversationManager.listConversations(),
+      });
+      return;
+    }
+
+    // ── Commands routed to a specific or active conversation ──
+    const engine = conversationManager.resolveTarget(msg.conversation_id);
+    if (!engine) return;
+
     switch (msgType) {
       case "mic_start":
-        engine.micStart();
+        // Voice is global — only the active conversation receives mic input
+        conversationManager.getActiveConversation()?.micStart();
         break;
       case "mic_stop":
-        engine.micStop();
+        conversationManager.getActiveConversation()?.micStop();
         break;
       case "cancel_turn":
         engine.cancelTurn();
@@ -142,18 +193,21 @@ async function createWindow() {
         break;
       case "switch_conversation":
         engine.switchConversation(msg.conversation_id || "");
+      case "compact":
+        engine.compactConversation();
         break;
       case "quit":
-        engine.stop();
+        conversationManager.stopAll();
         app.quit();
         break;
     }
   });
 
-  // When renderer is ready, replay state and start engine
+  // When renderer is ready, replay state for all conversations and send repo context
   mainWindow.webContents.on("did-finish-load", () => {
-    engine?.replayState();
-    const repo = engine?.githubRepo;
+    if (!conversationManager) return;
+    conversationManager.replayStateAll();
+    const repo = conversationManager.githubRepo;
     if (repo) {
       mainWindow?.webContents.send("engine-event", { type: "repo_context", repo });
     }
@@ -161,14 +215,14 @@ async function createWindow() {
 
   // Open external URLs in the system browser
   ipcMain.on("open-external", (_event, url: string) => {
-    if (typeof url === "string" && url.startsWith("https://github.com/")) {
+    if (typeof url === "string" && url.startsWith("https://")) {
       shell.openExternal(url);
     }
   });
 
-  // Start the engine
-  await engine.start();
-  console.log("[main] chat engine started");
+  // Start all restored conversations
+  await conversationManager.startAll();
+  console.log("[main] conversation manager started with", conversationManager.listConversations().length, "conversation(s)");
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -192,22 +246,22 @@ async function loadDevRenderer(window: BrowserWindow): Promise<void> {
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {
-  engine?.stop();
+  conversationManager?.stopAll();
   app.quit();
 });
 
 app.on("before-quit", () => {
-  engine?.stop();
+  conversationManager?.stopAll();
 });
 
 // Ensure child processes are stopped when Electron is terminated externally
 // (e.g. Ctrl+C in concurrently during development).
 process.on("SIGINT", () => {
-  engine?.stop();
+  conversationManager?.stopAll();
   process.exit(0);
 });
 process.on("SIGTERM", () => {
-  engine?.stop();
+  conversationManager?.stopAll();
   process.exit(0);
 });
 
