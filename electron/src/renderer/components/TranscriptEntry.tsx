@@ -10,6 +10,7 @@ const ROLE_LABELS: Record<string, string> = {
   user: "you",
   claude: "Tech Lead",
   claude_error: "Tech Lead (error)",
+  pm: "Product Manager",
 };
 
 // Matches full URLs or owner/repo#123 or bare #123

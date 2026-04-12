@@ -689,6 +689,7 @@
 .transcript-role.claude { color: var(--accent-cyan); }
 .transcript-role.sub_agent { color: var(--accent-green); }
 .transcript-role.claude_error { color: var(--accent-red); }
+.transcript-role.pm { color: var(--accent-magenta); }
 
 .transcript-time {
   font-size: 11px;

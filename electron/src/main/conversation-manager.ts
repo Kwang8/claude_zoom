@@ -254,8 +254,8 @@ export class ConversationManager {
     });
     this._opts.onEmit(id, {
       type: "transcript_message",
-      role: "claude",
-      text: `The Product Manager needs your input to generate better feature ideas:\n\n${question}\n\n*Reply to help the PM understand your product vision.*`,
+      role: "pm",
+      text: `${question}\n\n*Press / to type your answer.*`,
       timestamp,
       conversation_id: id,
     });
@@ -287,7 +287,7 @@ export class ConversationManager {
     });
     this._opts.onEmit(this.activeConversationId, {
       type: "transcript_message",
-      role: "claude",
+      role: "pm",
       text: "Got it — I'll use this context to generate better feature ideas next cycle.",
       timestamp,
       conversation_id: this.activeConversationId,
