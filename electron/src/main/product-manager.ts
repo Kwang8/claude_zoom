@@ -1,7 +1,88 @@
 import fs from "fs";
 import path from "path";
+import { execFileSync, spawn as spawnProcess, ChildProcess } from "child_process";
 import { OllamaSession } from "./ollama-session";
 import { extractFinalText } from "./narrator";
+
+// ── Ollama Auto-Setup ──
+
+async function ensureOllama(model: string, log: (msg: string) => void): Promise<boolean> {
+  // 1. Check if ollama binary exists
+  let ollamaPath: string | null = null;
+  try {
+    ollamaPath = execFileSync("which", ["ollama"], { encoding: "utf-8" }).trim();
+  } catch {
+    // Check common paths
+    for (const p of ["/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"]) {
+      if (fs.existsSync(p)) { ollamaPath = p; break; }
+    }
+  }
+
+  if (!ollamaPath) {
+    log("Ollama not found — attempting install via brew...");
+    try {
+      execFileSync("brew", ["install", "ollama"], {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 300_000, // 5 min timeout
+      });
+      ollamaPath = execFileSync("which", ["ollama"], { encoding: "utf-8" }).trim();
+      log("Ollama installed successfully");
+    } catch (e) {
+      log(`Failed to install Ollama: ${e}. Install manually: brew install ollama`);
+      return false;
+    }
+  }
+
+  // 2. Check if server is running
+  const isRunning = await OllamaSession.isAvailable();
+  if (!isRunning) {
+    log("Starting Ollama server...");
+    // Spawn detached so it survives app exit
+    const proc = spawnProcess(ollamaPath, ["serve"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    proc.unref();
+    // Wait for server to be ready
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if (await OllamaSession.isAvailable()) {
+        log("Ollama server started");
+        break;
+      }
+    }
+    if (!(await OllamaSession.isAvailable())) {
+      log("Ollama server failed to start");
+      return false;
+    }
+  }
+
+  // 3. Check if model is available
+  try {
+    const list = execFileSync(ollamaPath, ["list"], { encoding: "utf-8" });
+    const modelBase = model.split(":")[0];
+    if (!list.toLowerCase().includes(modelBase.toLowerCase())) {
+      log(`Pulling model ${model}... (this may take a while on first run)`);
+      try {
+        execFileSync(ollamaPath, ["pull", model], {
+          encoding: "utf-8",
+          stdio: ["pipe", "pipe", "pipe"],
+          timeout: 600_000, // 10 min timeout
+        });
+        log(`Model ${model} pulled successfully`);
+      } catch (e) {
+        log(`Failed to pull model ${model}: ${e}`);
+        return false;
+      }
+    }
+  } catch (e) {
+    log(`Failed to check models: ${e}`);
+    return false;
+  }
+
+  return true;
+}
 
 // ── Types ──
 
@@ -258,9 +339,10 @@ export class ProductManager {
   }
 
   async start(): Promise<void> {
-    const available = await OllamaSession.isAvailable(this._session.baseUrl);
-    if (!available) {
-      this._log("Ollama not available — PM agent disabled. Install: brew install ollama && ollama serve");
+    const model = this._session.model;
+    const ready = await ensureOllama(model, this._log);
+    if (!ready) {
+      this._log("Ollama setup failed — PM agent disabled");
       return;
     }
     this._log(`PM agent started (model: ${this._session.model}, interval: ${(this._opts.scanIntervalMs ?? 300_000) / 1000}s)`);
