@@ -436,7 +436,7 @@ export class ProductManager {
     this._opts = opts;
     this._log = opts.onLog ?? ((msg) => console.log(`[pm] ${msg}`));
     this._session = new OllamaSession({
-      model: opts.ollamaModel ?? "qwen2.5:7b",
+      model: opts.ollamaModel ?? "qwen2.5:14b",
       baseUrl: opts.ollamaBaseUrl,
       systemPrompt: PM_SYSTEM_PROMPT,
     });
@@ -706,9 +706,16 @@ export class ProductManager {
 
     const prompt = parts.join("\n");
 
+    // Fresh session for each generation to avoid context pollution
+    this._session.clearHistory();
+
     let fullText = "";
     try {
       for await (const event of this._session.send(prompt)) {
+        if (event.type === "result" && event.is_error) {
+          this._log(`ollama error: ${event.result}`);
+          return;
+        }
         if (event.type === "assistant") {
           const content = event.message?.content || [];
           for (const item of content) {
