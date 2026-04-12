@@ -670,10 +670,12 @@ export class ProductManager {
     return fullText.trim() || null;
   }
 
-  /** Record an answer from the user (from a "needs direction" conversation). */
+  /** Record an answer from the user and immediately kick off a new cycle. */
   addUserAnswer(answer: string): void {
     this._state.userAnswers.push(answer);
     savePMState(this._state, this._cwd);
+    this._log("new user context received — triggering immediate cycle");
+    setTimeout(() => this._cycle(), 1000);
   }
 
   private async _generateIdeas(observations: string[]): Promise<void> {
