@@ -133,6 +133,7 @@ export function App() {
           narration={state.narration}
           agents={state.agents}
           selectedAgentId={selectedAgentId}
+          pmStatus={state.pmStatus}
           onSelectAgent={setSelectedAgentId}
           onDeleteAgent={handleDeleteAgent}
         />

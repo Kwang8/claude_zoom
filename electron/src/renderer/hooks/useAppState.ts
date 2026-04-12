@@ -21,6 +21,7 @@ export interface State {
   isSpeaking: boolean;
   connected: boolean;
   githubRepo: string | null;
+  pmStatus: { status: string; ideaCount: number; lastActivity: string | null };
 }
 
 const initialState: State = {
@@ -35,6 +36,7 @@ const initialState: State = {
   progress: "ready",
   action: "connecting...",
   isSpeaking: false,
+  pmStatus: { status: "starting", ideaCount: 0, lastActivity: null },
   connected: false,
   githubRepo: null,
 };
@@ -222,6 +224,16 @@ function reducer(state: State, action: Action): State {
               }
             : c
         ),
+      };
+
+    case "pm_status":
+      return {
+        ...state,
+        pmStatus: {
+          status: msg.status,
+          ideaCount: msg.idea_count,
+          lastActivity: msg.last_activity,
+        },
       };
 
     default:

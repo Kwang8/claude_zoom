@@ -99,4 +99,5 @@ export type ServerMessage =
   | { type: "conversation_created"; conversation_id: string; timestamp: string }
   | { type: "conversation_switched"; conversation_id: string }
   | { type: "conversation_status"; conversation_id: string; status: ConversationStatus; detail?: string; pr_url?: string }
-  | { type: "usage-update"; totalInputTokens: number; totalOutputTokens: number };
+  | { type: "usage-update"; totalInputTokens: number; totalOutputTokens: number }
+  | { type: "pm_status"; status: string; idea_count: number; last_activity: string | null };

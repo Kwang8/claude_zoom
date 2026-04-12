@@ -115,6 +115,9 @@ export class ConversationManager {
     if (!cwd) return;
     this._pm = new ProductManager(cwd, {
       onProposal: (proposal) => this._handleProposal(proposal),
+      onStatusUpdate: (update) => {
+        this._opts.onEmit("__pm__", { type: "pm_status", ...update });
+      },
       onLog: (msg) => console.log(`[pm] ${msg}`),
     });
     this._pm.start();

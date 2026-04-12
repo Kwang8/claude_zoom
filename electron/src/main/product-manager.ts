@@ -309,8 +309,15 @@ function scanConversations(cwd: string): string[] {
 
 // ── Product Manager ──
 
+export interface PMStatusUpdate {
+  status: string;
+  idea_count: number;
+  last_activity: string | null;
+}
+
 export interface ProductManagerOpts {
   onProposal: (proposal: PMProposal) => void;
+  onStatusUpdate?: (update: PMStatusUpdate) => void;
   onLog?: (msg: string) => void;
   scanIntervalMs?: number;
   ollamaModel?: string;
@@ -338,15 +345,26 @@ export class ProductManager {
     this._state = loadPMState(cwd);
   }
 
+  private _emitStatus(status: string): void {
+    this._opts.onStatusUpdate?.({
+      status,
+      idea_count: this._state.ideas.length,
+      last_activity: this._state.lastScanAt,
+    });
+  }
+
   async start(): Promise<void> {
+    this._emitStatus("setting up");
     const model = this._session.model;
     const ready = await ensureOllama(model, this._log);
     if (!ready) {
       this._log("Ollama setup failed — PM agent disabled");
+      this._emitStatus("disabled");
       return;
     }
     this._log(`PM agent started (model: ${this._session.model}, interval: ${(this._opts.scanIntervalMs ?? 300_000) / 1000}s)`);
     this._running = true;
+    this._emitStatus("idle");
 
     // Run first cycle after a short delay
     setTimeout(() => this._cycle(), 10_000);
@@ -376,6 +394,7 @@ export class ProductManager {
     if (!this._running) return;
     try {
       this._log("starting scan cycle...");
+      this._emitStatus("scanning");
 
       // Step 1: Scan codebase
       const codeObs = scanCodebase(this._cwd);
@@ -391,6 +410,7 @@ export class ProductManager {
       this._state.lastScanAt = new Date().toISOString();
 
       // Step 3: Generate ideas via local model
+      this._emitStatus("thinking");
       await this._generateIdeas(allObs);
 
       // Step 4: Check if any high-priority ideas are ready to propose
@@ -408,6 +428,7 @@ export class ProductManager {
       }
 
       savePMState(this._state, this._cwd);
+      this._emitStatus("idle");
       this._log("scan cycle complete");
     } catch (e) {
       this._log(`scan cycle error: ${e}`);

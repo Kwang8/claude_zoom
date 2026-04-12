@@ -44,16 +44,45 @@ function UsagePanel() {
   );
 }
 
+function PMPanel({ status, ideaCount, lastActivity }: {
+  status: string;
+  ideaCount: number;
+  lastActivity: string | null;
+}) {
+  return (
+    <div className="pm-panel">
+      <div className="agents-header">product manager</div>
+      <div className="pm-status">
+        <div className="pm-status-row">
+          <span className={`pm-status-dot ${status === "scanning" ? "working" : status === "disabled" ? "error" : "done"}`} />
+          <span className="pm-status-label">{status}</span>
+        </div>
+        {ideaCount > 0 && (
+          <div className="pm-status-row">
+            <span className="pm-idea-count">{ideaCount} idea{ideaCount !== 1 ? "s" : ""}</span>
+          </div>
+        )}
+        {lastActivity && (
+          <div className="pm-status-row">
+            <span className="pm-last-activity">{lastActivity}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   appState: AppState;
   narration: string;
   agents: AgentInfo[];
   selectedAgentId: string | null;
+  pmStatus: { status: string; ideaCount: number; lastActivity: string | null };
   onSelectAgent: (agentId: string | null) => void;
   onDeleteAgent: (agentId: string) => void;
 }
 
-export function Sidebar({ appState, narration, agents, selectedAgentId, onSelectAgent, onDeleteAgent }: Props) {
+export function Sidebar({ appState, narration, agents, selectedAgentId, pmStatus, onSelectAgent, onDeleteAgent }: Props) {
   return (
     <div className="sidebar">
       <AvatarPanel
@@ -63,6 +92,7 @@ export function Sidebar({ appState, narration, agents, selectedAgentId, onSelect
         onClick={() => onSelectAgent(null)}
       />
       <UsagePanel />
+      <PMPanel {...pmStatus} />
       {agents.length > 0 && (
         <>
           <div className="agents-header">sub agents</div>

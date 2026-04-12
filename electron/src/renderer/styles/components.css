@@ -183,6 +183,47 @@
   color: var(--accent-cyan);
 }
 
+/* ── PM Panel ── */
+
+.pm-panel {
+  border-bottom: 1px solid var(--border);
+}
+
+.pm-status {
+  padding: 0 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pm-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pm-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pm-status-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.pm-idea-count {
+  font-size: 11px;
+  color: var(--accent-magenta);
+}
+
+.pm-last-activity {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 .agents-list {
   padding: 0 8px 8px;
   display: flex;
