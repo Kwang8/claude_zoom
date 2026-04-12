@@ -24,4 +24,7 @@ contextBridge.exposeInMainWorld("claude", {
   getPMData: (): Promise<{ ideas: any[]; observations: string[] }> => {
     return ipcRenderer.invoke("get-pm-data");
   },
+  pmClearIdeas: (): Promise<void> => {
+    return ipcRenderer.invoke("pm-clear-ideas");
+  },
 });

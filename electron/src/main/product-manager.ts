@@ -527,6 +527,19 @@ export class ProductManager {
     return this._state.observations;
   }
 
+  /** Wipe all ideas, observations, and reset Ollama session history. */
+  clearIdeas(): void {
+    this._state.ideas = [];
+    this._state.observations = [];
+    this._state.proposedIds = [];
+    this._state.dismissedIds = [];
+    this._state.lastScanAt = null;
+    this._session.clearHistory();
+    savePMState(this._state, this._cwd);
+    this._log("all ideas cleared");
+    this._emitStatus("idle");
+  }
+
   /** Mark an idea as dismissed — PM learns to avoid similar ideas. */
   dismissIdea(ideaId: string): void {
     this._state.dismissedIds.push(ideaId);

@@ -10,6 +10,7 @@ declare global {
       openExternal?: (url: string) => void;
       getUsage?: () => Promise<{ totalInputTokens: number; totalOutputTokens: number }>;
       pmInstall?: () => Promise<void>;
+      pmClearIdeas?: () => Promise<void>;
       getPMData?: () => Promise<{ ideas: any[]; observations: string[] }>;
     };
   }

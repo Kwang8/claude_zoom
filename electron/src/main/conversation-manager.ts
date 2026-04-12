@@ -251,6 +251,11 @@ export class ConversationManager {
     this._pm?.addUserAnswer(answer);
   }
 
+  /** Clear all PM ideas and reset. */
+  clearPMIdeas(): void {
+    this._pm?.clearIdeas();
+  }
+
   replayStateAll(): void {
     for (const { engine } of this._conversations.values()) {
       engine.replayState();

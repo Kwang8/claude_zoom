@@ -35,6 +35,21 @@ export function PMDetailView({ onBack }: Props) {
       <div className="pm-detail-header">
         <button className="transcript-back" onClick={onBack} type="button">back</button>
         <h2>Product Manager</h2>
+        {ideas.length > 0 && (
+          <button
+            className="pm-dismiss-btn"
+            style={{ marginLeft: "auto" }}
+            onClick={() => {
+              window.claude?.pmClearIdeas?.().then(() => {
+                setIdeas([]);
+                setObservations([]);
+              });
+            }}
+            type="button"
+          >
+            clear all ideas
+          </button>
+        )}
       </div>
 
       <div className="pm-detail-body">

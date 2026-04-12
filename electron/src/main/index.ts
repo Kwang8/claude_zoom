@@ -256,6 +256,10 @@ async function createWindow() {
     await conversationManager?.installPM();
   });
 
+  ipcMain.handle("pm-clear-ideas", () => {
+    conversationManager?.clearPMIdeas();
+  });
+
   ipcMain.handle("get-pm-data", () => {
     return conversationManager?.getPMData() ?? { ideas: [], observations: [] };
   });
