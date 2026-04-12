@@ -554,10 +554,19 @@ export class ProductManager {
       if (this._state.userAnswers.length === 0) {
         this._log("no product context yet — generating questions from scan");
         this._emitStatus("thinking");
-        const question = await this._generateQuestions(allObs);
-        if (question) {
-          this._opts.onQuestion(question);
+        let question: string | null = null;
+        try {
+          question = await this._generateQuestions(allObs);
+        } catch (e) {
+          this._log(`question generation error: ${e}`);
         }
+        // Always ask — use generated questions or fallback
+        this._opts.onQuestion(
+          question ||
+          `I've scanned the project and found ${allObs.length} observations. ` +
+          `To propose better features, I need to understand: What is this product's core value? ` +
+          `What are you trying to build that doesn't exist yet?`
+        );
         savePMState(this._state, this._cwd);
         this._emitStatus("idle");
         this._log("scan cycle complete (waiting for user context)");

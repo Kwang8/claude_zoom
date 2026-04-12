@@ -243,7 +243,7 @@ export class ConversationManager {
       timestamp,
       conversation_id: id,
     });
-    console.log(`[pm] needs direction conversation created: ${id}`);
+    console.log(`[pm] needs direction conversation created: ${id}, emitted 3 events`);
   }
 
   /** Forward a user's answer to the PM for product context. */
