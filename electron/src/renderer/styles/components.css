@@ -385,6 +385,19 @@
   margin-bottom: 4px;
 }
 
+.tech-lead-avatar {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.5));
+  transition: filter 0.2s ease, transform 0.2s ease;
+}
+
+.tech-lead-avatar:hover {
+  filter: drop-shadow(0 0 8px rgba(0, 212, 255, 0.9));
+  transform: scale(1.15) rotate(-5deg);
+}
+
 .transcript-role {
   font-size: 13px;
   font-weight: 700;

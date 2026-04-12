@@ -116,6 +116,16 @@ export class ConversationManager {
     return this.getActiveConversation()?.githubRepo ?? null;
   }
 
+  getTotalUsage(): { totalInputTokens: number; totalOutputTokens: number } {
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    for (const { engine } of this._conversations.values()) {
+      totalInputTokens += engine.totalInputTokens;
+      totalOutputTokens += engine.totalOutputTokens;
+    }
+    return { totalInputTokens, totalOutputTokens };
+  }
+
   // ── Persistence ──
 
   /** Restore all conversations from the registry, creating engines for each. */

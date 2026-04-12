@@ -186,7 +186,8 @@ export class TechLead {
     agentName: string,
     agentId: string,
     question: string,
-    taskContext: string
+    taskContext: string,
+    onEvent?: (event: Record<string, any>) => void
   ): Promise<TLResponse> {
     this.contextTree.addAgentQuestion(agentId, question);
     const prompt = this._withContext(
@@ -195,7 +196,7 @@ export class TechLead {
       `Check the context tree for relevant information. Answer from your knowledge ` +
       `of the task. If you truly need user input, use <ESCALATE>.`
     );
-    const events = await this._collect(prompt);
+    const events = await this._collect(prompt, onEvent);
     const response = parseTLResponse(events);
     this.recordInsights(response);
     return response;
@@ -205,7 +206,8 @@ export class TechLead {
     agentName: string,
     agentId: string,
     task: string,
-    summary: string
+    summary: string,
+    onEvent?: (event: Record<string, any>) => void
   ): Promise<TLResponse> {
     this.contextTree.setAgentResult(agentId, summary);
     this.contextTree.checkTaskCompletion();
@@ -217,13 +219,18 @@ export class TechLead {
       `If it needs fixes, use <FIX>. If follow-up work is needed, use <SPAWN>. ` +
       `If you learned something about the project, emit <INSIGHT>.`
     );
-    const events = await this._collect(prompt);
+    const events = await this._collect(prompt, onEvent);
     const response = parseTLResponse(events);
     this.recordInsights(response);
     return response;
   }
 
-  async forwardUserAnswer(question: string, answer: string, agentId: string | null): Promise<TLResponse> {
+  async forwardUserAnswer(
+    question: string,
+    answer: string,
+    agentId: string | null,
+    onEvent?: (event: Record<string, any>) => void
+  ): Promise<TLResponse> {
     if (agentId) this.contextTree.addAgentAnswer(agentId, answer);
     const prompt = this._withContext(
       `The user answered your question.\n` +
@@ -231,7 +238,7 @@ export class TechLead {
       `Answer: ${answer}\n\n` +
       `Continue with this information. Provide an <ANSWER> for the waiting sub-agent.`
     );
-    const events = await this._collect(prompt);
+    const events = await this._collect(prompt, onEvent);
     const response = parseTLResponse(events);
     this.recordInsights(response);
     return response;

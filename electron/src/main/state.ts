@@ -45,6 +45,8 @@ export interface AppState {
   current_conversation_id?: string | null;
   tech_lead_session_id?: string | null;
   tl_memory?: TLMemoryState | null;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
 }
 
 export interface ConversationRegistryEntry {
@@ -144,6 +146,8 @@ export function loadState(cwd: string, stateId?: string): AppState | null {
         spawned_agent_ids: Array.isArray(conv.spawned_agent_ids) ? conv.spawned_agent_ids : [],
       })),
       current_conversation_id: data.current_conversation_id ?? null,
+      totalInputTokens: data.totalInputTokens ?? 0,
+      totalOutputTokens: data.totalOutputTokens ?? 0,
     };
   } catch (e) {
     console.warn("[state] failed to load:", e);

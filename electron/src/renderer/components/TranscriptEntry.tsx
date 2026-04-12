@@ -105,10 +105,16 @@ export function TranscriptEntry({ message, githubRepo }: Props) {
   }
 
   const label = role === "sub_agent" ? agent_name || "agent" : ROLE_LABELS[role] || role;
+  const isTechLead = role === "claude" || role === "claude_error";
 
   return (
     <div className="transcript-entry">
       <div className="transcript-header">
+        {isTechLead && (
+          <span className="tech-lead-avatar" title="Tech Lead">
+            🐶
+          </span>
+        )}
         <span className={`transcript-role ${role}`}>{label}</span>
         <span className="transcript-time">{timestamp}</span>
       </div>

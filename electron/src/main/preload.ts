@@ -15,4 +15,7 @@ contextBridge.exposeInMainWorld("claude", {
   openExternal: (url: string) => {
     ipcRenderer.send("open-external", url);
   },
+  getUsage: (): Promise<{ totalInputTokens: number; totalOutputTokens: number }> => {
+    return ipcRenderer.invoke("get-usage");
+  },
 });
