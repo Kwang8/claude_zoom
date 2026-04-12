@@ -588,7 +588,9 @@ export class ProductManager {
 
       // Step 2: Generate new ideas via local model
       this._emitStatus("thinking");
+      this._log("generating ideas with local model...");
       await this._generateIdeas(allObs);
+      this._log(`ideas after generation: ${this._state.ideas.length}`);
 
       // Step 3: Age existing ideas — bump score for ideas that survive cycles
       for (const idea of this._state.ideas) {
@@ -717,6 +719,11 @@ export class ProductManager {
     } catch (e) {
       this._log(`idea generation failed: ${e}`);
       return;
+    }
+
+    this._log(`ollama response length: ${fullText.length} chars`);
+    if (fullText.length < 20) {
+      this._log(`ollama response too short: "${fullText}"`);
     }
 
     // Parse ideas
