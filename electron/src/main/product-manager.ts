@@ -134,35 +134,57 @@ interface PMState {
   observations: string[];
   lastScanAt: string | null;
   proposalHistory: string[];  // idea IDs already proposed
+  userAnswers: string[];      // answers from "needs direction" conversations
 }
 
 // ── System Prompts ──
 
 const PM_SYSTEM_PROMPT = `\
-You are a Product Manager. You think about the product, not the code.
-Your job is to observe the codebase structure and user behavior patterns,
-then propose features that would make the product better.
+You are a Product Manager embedded inside a software project. Your job is to \
+deeply understand what this product does, who it's for, and then propose \
+innovative features that would make it significantly more valuable.
 
-You DO NOT write code. You DO NOT think about implementation details.
-You think about: user needs, product gaps, feature opportunities,
-UX improvements, missing capabilities.
+STEP 1 — UNDERSTAND THE PRODUCT:
+Read the codebase observations carefully. Figure out:
+- What does this application actually do?
+- Who are the users? What are they trying to accomplish?
+- What's the core value proposition?
+- What adjacent problems could this product solve?
 
-When given observations about the codebase and past conversations,
-generate feature ideas. For each idea, output a JSON block:
+STEP 2 — THINK BIG:
+Go beyond reliability improvements (tests, linting, docs). Those are table stakes.
+Think about NET NEW features — capabilities that don't exist yet and would be \
+genuinely exciting. Think about what would make a user say "wow, I didn't know \
+it could do that." Think about competitive advantages, novel workflows, and \
+10x improvements.
+
+STEP 3 — OUTPUT:
+For each idea, output a JSON block:
 
 <IDEA>
 {
   "title": "Short feature name",
-  "problem": "What problem does this solve?",
-  "proposal": "What would the user experience look like?",
+  "problem": "What user problem does this solve? Be specific.",
+  "proposal": "Describe the user experience. What would they see, do, feel?",
   "priority": "high|medium|low",
   "source": "codebase|conversation|pattern"
 }
 </IDEA>
 
-Output 1-3 ideas per cycle. Be specific and actionable.
-Skip ideas that are too vague or too small (typo fixes, etc.).
-Focus on features that would meaningfully improve the product.`;
+If you DON'T understand the product well enough to propose meaningful features, \
+output an <ASK> block instead:
+
+<ASK>
+Your question for the user about the product vision, target users, or priorities.
+</ASK>
+
+RULES:
+- Be SPECIFIC to THIS product. No generic suggestions like "add tests" or "add docs."
+- Each idea should be a concrete feature a user would interact with.
+- Think about what's MISSING, not what's BROKEN.
+- 1-3 ideas per cycle, or 1-2 questions if you need direction.`;
+
+const ASK_RE = /<ASK>([\s\S]*?)<\/ASK>/gi;
 
 const IDEA_RE = /<IDEA>\s*(\{[\s\S]*?\})\s*<\/IDEA>/gi;
 
@@ -198,12 +220,13 @@ function loadPMState(cwd: string): PMState {
         observations: data.observations ?? [],
         lastScanAt: data.lastScanAt ?? null,
         proposalHistory: data.proposalHistory ?? [],
+        userAnswers: data.userAnswers ?? [],
       };
     }
   } catch (e) {
     console.warn("[pm] failed to load state:", e);
   }
-  return { ideas: [], observations: [], lastScanAt: null, proposalHistory: [] };
+  return { ideas: [], observations: [], lastScanAt: null, proposalHistory: [], userAnswers: [] };
 }
 
 // ── Codebase Scanner ──
@@ -342,6 +365,7 @@ export interface PMStatusUpdate {
 
 export interface ProductManagerOpts {
   onProposal: (proposal: PMProposal) => void;
+  onQuestion: (question: string) => void;
   onStatusUpdate?: (update: PMStatusUpdate) => void;
   onLog?: (msg: string) => void;
   scanIntervalMs?: number;
@@ -499,13 +523,31 @@ export class ProductManager {
     }
   }
 
+  /** Record an answer from the user (from a "needs direction" conversation). */
+  addUserAnswer(answer: string): void {
+    this._state.userAnswers.push(answer);
+    savePMState(this._state, this._cwd);
+  }
+
   private async _generateIdeas(observations: string[]): Promise<void> {
     const existingTitles = this._state.ideas.map((i) => i.title.toLowerCase());
-    const prompt =
-      `Here are my observations about the current state of the project:\n\n` +
-      observations.map((o) => `- ${o}`).join("\n") +
-      `\n\nExisting ideas (don't repeat): ${existingTitles.join(", ") || "(none)"}\n\n` +
-      `Generate 1-3 NEW feature ideas based on these observations. Use <IDEA> blocks.`;
+
+    // Build context with product understanding
+    const parts: string[] = [];
+    parts.push(`Here are my observations about the current state of the project:\n`);
+    parts.push(observations.map((o) => `- ${o}`).join("\n"));
+
+    if (this._state.userAnswers.length > 0) {
+      parts.push(`\n\nProduct context from the user:`);
+      for (const answer of this._state.userAnswers) {
+        parts.push(`- ${answer}`);
+      }
+    }
+
+    parts.push(`\n\nExisting ideas (don't repeat): ${existingTitles.join(", ") || "(none)"}`);
+    parts.push(`\nGenerate 1-3 NEW innovative feature ideas. Focus on net-new capabilities, not reliability improvements. If you don't understand what this product does or who it's for, use <ASK> to ask the user.`);
+
+    const prompt = parts.join("\n");
 
     let fullText = "";
     try {
@@ -544,6 +586,15 @@ export class ProductManager {
         this._state.ideas.push(idea);
         this._log(`new idea: ${idea.title} (${idea.priority})`);
       } catch {}
+    }
+
+    // Handle <ASK> blocks — PM needs direction from user
+    for (const match of fullText.matchAll(ASK_RE)) {
+      const question = match[1].trim();
+      if (question) {
+        this._log(`PM needs direction: ${question.slice(0, 80)}`);
+        this._opts.onQuestion(question);
+      }
     }
 
     // Cap ideas at 50

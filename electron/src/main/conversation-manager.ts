@@ -116,6 +116,7 @@ export class ConversationManager {
     if (!cwd) return;
     this._pm = new ProductManager(cwd, {
       onProposal: (proposal) => this._handleProposal(proposal),
+      onQuestion: (question) => this._handlePMQuestion(question),
       onStatusUpdate: (update) => {
         this._opts.onEmit("__pm__", { type: "pm_status", ...update });
       },
@@ -191,6 +192,36 @@ export class ConversationManager {
       conversation_id: id,
     });
     console.log(`[pm] proposal created as conversation ${id}: ${idea.title}`);
+  }
+
+  private _handlePMQuestion(question: string): void {
+    const id = this.createConversation();
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+
+    this._opts.onEmit(id, {
+      type: "conversation_created",
+      conversation_id: id,
+      timestamp,
+    });
+    this._opts.onEmit(id, {
+      type: "conversation_status",
+      conversation_id: id,
+      status: "needs_input",
+      detail: "PM needs direction",
+    });
+    this._opts.onEmit(id, {
+      type: "transcript_message",
+      role: "claude",
+      text: `The Product Manager needs your input to generate better feature ideas:\n\n${question}\n\n*Reply to help the PM understand your product vision.*`,
+      timestamp,
+      conversation_id: id,
+    });
+    console.log(`[pm] needs direction conversation created: ${id}`);
+  }
+
+  /** Forward a user's answer to the PM for product context. */
+  addPMAnswer(answer: string): void {
+    this._pm?.addUserAnswer(answer);
   }
 
   replayStateAll(): void {
