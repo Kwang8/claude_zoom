@@ -141,6 +141,8 @@ export class ChatEngine {
 
   // State
   private _transcriptLog: Record<string, any>[] = [];
+  private _totalInputTokens = 0;
+  private _totalOutputTokens = 0;
   private _awaitingPrAgentId: string | null = null;
   private _awaitingQuestionAgentId: string | null = null;
   private _awaitingTLEscalation: string | null = null;
@@ -235,6 +237,18 @@ export class ChatEngine {
     this._send("action", { text });
   }
 
+  get totalInputTokens(): number { return this._totalInputTokens; }
+  get totalOutputTokens(): number { return this._totalOutputTokens; }
+
+  private _onUsage(usage: { input_tokens?: number; output_tokens?: number }): void {
+    this._totalInputTokens += usage.input_tokens ?? 0;
+    this._totalOutputTokens += usage.output_tokens ?? 0;
+    this._send("usage-update", {
+      totalInputTokens: this._totalInputTokens,
+      totalOutputTokens: this._totalOutputTokens,
+    });
+  }
+
   private _isWelcomeBackMessage(msg: Record<string, any> | null | undefined): boolean {
     if (!msg || msg.type !== "transcript_message" || msg.role !== "claude") {
       return false;
@@ -245,6 +259,10 @@ export class ChatEngine {
   // ── Focus management ──
 
   setFocused(focused: boolean): void {
+    if (this._focused && !focused) {
+      // Save state when losing focus
+      this._saveState();
+    }
     this._focused = focused;
     if (focused && this._unreadCount > 0) {
       this._unreadCount = 0;
@@ -703,6 +721,9 @@ export class ChatEngine {
     this._sendTicker("tech lead");
 
     this._techLead.delegateTask(task, (event) => {
+      if (event.type === "result" && event.usage) {
+        this._onUsage(event.usage);
+      }
       // Stream TL tool calls to the UI ticker
       if (event.type === "assistant") {
         const content = event.message?.content || [];
@@ -761,7 +782,9 @@ export class ChatEngine {
     agentId: string, agentName: string, question: string, task: string
   ): void {
     this._sendAction(`tech lead answering ${agentName}...`);
-    this._techLead.handleAgentQuestion(agentName, agentId, question, task).then((response) => {
+    this._techLead.handleAgentQuestion(agentName, agentId, question, task, (event) => {
+      if (event.type === "result" && event.usage) this._onUsage(event.usage);
+    }).then((response) => {
       if (response.answer) {
         this._agentManager.handleAgentQuestion(
           agentId, response.answer,
@@ -789,7 +812,9 @@ export class ChatEngine {
   private _handleTLEscalationResponse(
     question: string, agentId: string | null, userAnswer: string
   ): void {
-    this._techLead.forwardUserAnswer(question, userAnswer, agentId).then((response) => {
+    this._techLead.forwardUserAnswer(question, userAnswer, agentId, (event) => {
+      if (event.type === "result" && event.usage) this._onUsage(event.usage);
+    }).then((response) => {
       if (response.answer && agentId) {
         this._agentManager.handleAgentQuestion(
           agentId, response.answer,
@@ -810,7 +835,9 @@ export class ChatEngine {
     const summary = extractFinalText(agent.events) || "Completed with no summary.";
     this._sendAction(`tech lead reviewing ${agent.name}...`);
 
-    this._techLead.reviewResult(agent.name, agent.id, agent.task, summary).then((response) => {
+    this._techLead.reviewResult(agent.name, agent.id, agent.task, summary, (event) => {
+      if (event.type === "result" && event.usage) this._onUsage(event.usage);
+    }).then((response) => {
       for (const [fixName, fixInstruction] of response.fixes) {
         const fixAgent = this._agentManager.resolveAgentRef(fixName);
         if (fixAgent) {
@@ -1018,6 +1045,9 @@ export class ChatEngine {
   }
 
   private _onSubEvent(agentId: string, event: Record<string, any>): void {
+    if (event.type === "result" && event.usage) {
+      this._onUsage(event.usage);
+    }
     if (event.type !== "assistant") return;
     const agent = this._agentManager.agents.get(agentId);
     const content = event.message?.content || [];
@@ -1114,6 +1144,8 @@ export class ChatEngine {
       current_conversation_id: this._currentConvId,
       tech_lead_session_id: this._techLead.sessionId,
       tl_memory: this._techLead.getMemory(),
+      totalInputTokens: this._totalInputTokens,
+      totalOutputTokens: this._totalOutputTokens,
     };
     saveState(state, cwd, stateId);
   }
@@ -1139,6 +1171,8 @@ export class ChatEngine {
 
     this.session.sessionId = state.main_session_id;
     this._agentManager._counter = state.agent_counter;
+    if (state.totalInputTokens) this._totalInputTokens = state.totalInputTokens;
+    if (state.totalOutputTokens) this._totalOutputTokens = state.totalOutputTokens;
     if (state.tech_lead_session_id) {
       this._techLead.restoreSession(state.tech_lead_session_id);
     }
