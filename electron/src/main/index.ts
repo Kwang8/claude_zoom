@@ -157,6 +157,12 @@ async function createWindow() {
       const engine = conversationManager.getConversation(targetId);
       if (!engine) return;
       conversationManager.setActive(targetId);
+      // Start the engine if it hasn't been started yet
+      if (!engine.isStarted) {
+        engine.start().catch((err) => {
+          console.error("[main] failed to start switched conversation:", err);
+        });
+      }
       mainWindow?.webContents.send("engine-event", {
         type: "conversation_switched",
         conversation_id: targetId,

@@ -158,6 +158,7 @@ export class ChatEngine {
   private _convStatus: string = "active";
   private _focused: boolean = true;
   private _unreadCount: number = 0;
+  private _started: boolean = false;
 
   constructor(
     session: ClaudeSession,
@@ -275,7 +276,11 @@ export class ChatEngine {
 
   // ── Public API ──
 
+  get isStarted(): boolean { return this._started; }
+
   async start(): Promise<void> {
+    if (this._started) return;
+    this._started = true;
     // Try to init recorder (non-blocking, best-effort)
     this._recorder = new RecorderBridge();
     this._recorder.start().then((ok) => {
