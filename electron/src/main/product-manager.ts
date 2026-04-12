@@ -363,7 +363,7 @@ export class ProductManager {
     this._opts = opts;
     this._log = opts.onLog ?? ((msg) => console.log(`[pm] ${msg}`));
     this._session = new OllamaSession({
-      model: opts.ollamaModel ?? "qwen2.5:14b",
+      model: opts.ollamaModel ?? "qwen2.5:7b",
       baseUrl: opts.ollamaBaseUrl,
       systemPrompt: PM_SYSTEM_PROMPT,
     });
@@ -422,17 +422,17 @@ export class ProductManager {
   }
 
   private _startLoop(): void {
-    this._log(`PM agent started (model: ${this._session.model}, interval: ${(this._opts.scanIntervalMs ?? 300_000) / 1000}s)`);
+    this._log(`PM agent started (model: ${this._session.model}, interval: ${(this._opts.scanIntervalMs ?? 900_000) / 1000}s)`);
     this._running = true;
     this._emitStatus("idle");
 
     // Run first cycle after a short delay
-    setTimeout(() => this._cycle(), 10_000);
+    setTimeout(() => this._cycle(), 30_000);
 
     // Then on interval
     this._timer = setInterval(
       () => this._cycle(),
-      this._opts.scanIntervalMs ?? 300_000 // 5 min default
+      this._opts.scanIntervalMs ?? 900_000 // 15 min default
     );
   }
 

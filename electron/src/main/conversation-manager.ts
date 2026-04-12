@@ -141,13 +141,37 @@ export class ConversationManager {
   }
 
   private _handleProposal(proposal: PMProposal): void {
-    // Create a conversation for the proposal
     const id = this.createConversation();
     const engine = this.getConversation(id);
     if (!engine) return;
 
-    // Emit proposal status + content to the renderer
     const timestamp = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+    const { idea } = proposal;
+
+    // Build a rich proposal document
+    const doc = [
+      `# ${idea.title}`,
+      ``,
+      `## Summary`,
+      idea.problem,
+      ``,
+      `## Proposed Solution`,
+      idea.proposal,
+      ``,
+      `## Details`,
+      `- **Priority:** ${idea.priority}`,
+      `- **Source:** ${idea.source === "codebase" ? "Codebase analysis" : idea.source === "conversation" ? "User conversation patterns" : "Pattern detection"}`,
+      `- **Generated:** ${new Date(idea.createdAt).toLocaleString()}`,
+      ``,
+      `## Why This Matters`,
+      idea.priority === "high"
+        ? `This is a high-priority improvement that would significantly impact the product. The PM agent identified this based on ${idea.source === "codebase" ? "gaps in the codebase" : "repeated user requests"}.`
+        : `This is a ${idea.priority}-priority suggestion based on ${idea.source === "codebase" ? "codebase observations" : "usage patterns"}.`,
+      ``,
+      `---`,
+      `*Say "do it" to start working on this, or dismiss to skip.*`,
+    ].join("\n");
+
     this._opts.onEmit(id, {
       type: "conversation_created",
       conversation_id: id,
@@ -157,23 +181,16 @@ export class ConversationManager {
       type: "conversation_status",
       conversation_id: id,
       status: "proposal",
-      detail: proposal.idea.title,
-    });
-    this._opts.onEmit(id, {
-      type: "transcript_message",
-      role: "system",
-      text: `🐶 PM Proposal: ${proposal.idea.title}`,
-      timestamp,
-      conversation_id: id,
+      detail: idea.title,
     });
     this._opts.onEmit(id, {
       type: "transcript_message",
       role: "claude",
-      text: proposal.fullProposal,
+      text: doc,
       timestamp,
       conversation_id: id,
     });
-    console.log(`[pm] proposal created as conversation ${id}: ${proposal.idea.title}`);
+    console.log(`[pm] proposal created as conversation ${id}: ${idea.title}`);
   }
 
   replayStateAll(): void {
