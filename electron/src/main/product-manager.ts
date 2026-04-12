@@ -283,6 +283,58 @@ function scanCodebase(cwd: string): string[] {
   const dirs = new Set(files.map((f) => f.path.split("/").slice(0, 2).join("/")));
   observations.push(`Top-level structure: ${Array.from(dirs).sort().join(", ")}`);
 
+  // List key files with their roles (inferred from name/path)
+  const keyFiles = files
+    .filter((f) => {
+      const name = f.path.toLowerCase();
+      return name.includes("app.") || name.includes("index.") ||
+             name.includes("main.") || name.endsWith("package.json") ||
+             name.includes("readme") || name.includes("manager") ||
+             name.includes("engine") || name.includes("session") ||
+             name.includes("agent");
+    })
+    .slice(0, 15);
+  if (keyFiles.length > 0) {
+    observations.push(`Key files: ${keyFiles.map((f) => f.path).join(", ")}`);
+  }
+
+  // Read package.json for project description
+  const pkgFile = files.find((f) => f.path === "package.json" || f.path === "electron/package.json");
+  if (pkgFile) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(cwd, pkgFile.path), "utf-8"));
+      if (pkg.description) observations.push(`Project description: ${pkg.description}`);
+      if (pkg.name) observations.push(`Project name: ${pkg.name}`);
+      const deps = Object.keys(pkg.dependencies ?? {}).concat(Object.keys(pkg.devDependencies ?? {}));
+      if (deps.length > 0) observations.push(`Dependencies: ${deps.slice(0, 20).join(", ")}`);
+    } catch {}
+  }
+
+  // Read first 30 lines of key source files to understand what the app does
+  const contentFiles = files
+    .filter((f) => {
+      const name = path.basename(f.path);
+      return name === "App.tsx" || name === "index.ts" || name === "chat-engine.ts" ||
+             name === "tech-lead.ts" || name === "product-manager.ts" ||
+             name === "conversation-manager.ts";
+    })
+    .slice(0, 5);
+  for (const cf of contentFiles) {
+    try {
+      const content = fs.readFileSync(path.join(cwd, cf.path), "utf-8");
+      const preview = content.split("\n").slice(0, 30).join("\n").slice(0, 500);
+      observations.push(`[${cf.path} preview]:\n${preview}`);
+    } catch {}
+  }
+
+  // Component names (understand UI surface)
+  const components = files
+    .filter((f) => f.path.includes("components/") && f.path.endsWith(".tsx"))
+    .map((f) => path.basename(f.path, ".tsx"));
+  if (components.length > 0) {
+    observations.push(`UI components: ${components.join(", ")}`);
+  }
+
   // TODOs
   if (todos.length > 0) {
     observations.push(`Found ${todos.length} TODOs/FIXMEs:`);
@@ -290,13 +342,6 @@ function scanCodebase(cwd: string): string[] {
       observations.push(`  ${todo}`);
     }
   }
-
-  // Look for missing patterns
-  const hasTests = files.some((f) => f.path.includes("test") || f.path.includes("spec"));
-  if (!hasTests) observations.push("No test files detected — testing infrastructure missing");
-
-  const hasReadme = files.some((f) => f.path.toLowerCase() === "readme.md");
-  if (!hasReadme) observations.push("No README.md found");
 
   return observations;
 }
