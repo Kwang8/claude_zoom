@@ -198,6 +198,7 @@ export function App() {
         action={state.action}
         connected={connected}
         isRecording={isRecording}
+        onSendText={(text) => send({ type: "send_text", text })}
       />
     </div>
   );

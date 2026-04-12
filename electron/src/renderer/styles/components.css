@@ -862,6 +862,71 @@
   color: var(--text-muted);
 }
 
+.statusbar-keyboard-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: "SF Mono", "Fira Code", monospace;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.statusbar-keyboard-btn:hover {
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+}
+
+.statusbar-input-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusbar-input {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 4px 10px;
+  outline: none;
+  font-family: inherit;
+}
+
+.statusbar-input:focus {
+  border-color: var(--accent-cyan);
+}
+
+.statusbar-input::placeholder {
+  color: var(--text-muted);
+}
+
+.statusbar-send-btn {
+  background: none;
+  border: 1px solid var(--accent-cyan);
+  color: var(--accent-cyan);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.statusbar-send-btn:hover {
+  background: color-mix(in srgb, transparent 85%, var(--accent-cyan) 15%);
+}
+
 .statusbar-dot {
   width: 8px;
   height: 8px;
