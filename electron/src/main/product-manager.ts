@@ -550,21 +550,18 @@ export class ProductManager {
       this._state.lastScanAt = new Date().toISOString();
       this._log(`scan: ${codeObs.length} code + ${convObs.length} conversation observations`);
 
-      // Step 1.5: If PM has no product context yet, ask the user first
+      // Step 1.5: If PM has no product context yet, use the local model to ask smart questions
       if (this._state.userAnswers.length === 0) {
-        this._log("no product context yet — asking user for direction");
-        this._opts.onQuestion(
-          "I've scanned the codebase and I can see the project structure, but I'd love to understand the bigger picture:\n\n" +
-          "1. **Who are the target users?** (developers, teams, enterprises?)\n" +
-          "2. **What's the core problem this solves** that existing tools don't?\n" +
-          "3. **What's your vision for where this product goes next?**\n" +
-          "4. **What kind of features excite you most?** (UX polish, new capabilities, integrations, AI features?)\n\n" +
-          "This will help me generate much better, product-specific feature ideas."
-        );
+        this._log("no product context yet — generating questions from scan");
+        this._emitStatus("thinking");
+        const question = await this._generateQuestions(allObs);
+        if (question) {
+          this._opts.onQuestion(question);
+        }
         savePMState(this._state, this._cwd);
         this._emitStatus("idle");
         this._log("scan cycle complete (waiting for user context)");
-        return; // Don't generate ideas yet
+        return;
       }
 
       // Step 2: Generate new ideas via local model
@@ -618,6 +615,37 @@ export class ProductManager {
     } catch (e) {
       this._log(`scan cycle error: ${e}`);
     }
+  }
+
+  /** Use the local model to generate project-specific questions based on scan results. */
+  private async _generateQuestions(observations: string[]): Promise<string | null> {
+    const prompt =
+      `I just scanned a software project. Here's what I found:\n\n` +
+      observations.map((o) => `- ${o}`).join("\n") +
+      `\n\nBased on what you can see about this project, write 3-4 specific questions ` +
+      `to ask the developer to help you understand the product vision and generate ` +
+      `innovative feature ideas. Your questions should reference specific things you ` +
+      `noticed in the codebase — file names, components, architecture patterns. ` +
+      `Don't ask generic questions. Ask questions that show you understand what this ` +
+      `project is and want to go deeper.\n\n` +
+      `Format: just the questions as a numbered list, nothing else.`;
+
+    let fullText = "";
+    try {
+      for await (const event of this._session.send(prompt)) {
+        if (event.type === "assistant") {
+          const content = event.message?.content || [];
+          for (const item of content) {
+            if (item.type === "text") fullText += item.text;
+          }
+        }
+      }
+    } catch (e) {
+      this._log(`question generation failed: ${e}`);
+      return null;
+    }
+
+    return fullText.trim() || null;
   }
 
   /** Record an answer from the user (from a "needs direction" conversation). */
