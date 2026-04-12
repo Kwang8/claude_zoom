@@ -3,16 +3,29 @@ import type { AgentInfo, ConversationGroup, TranscriptMessage } from "../types/m
 import { GroupedTranscript } from "./GroupedTranscript";
 import { TranscriptEntry } from "./TranscriptEntry";
 
+interface PMProposalCard {
+  ideaId: string;
+  title: string;
+  problem: string;
+  proposal: string;
+  priority: string;
+  tlAssessment: string;
+  timestamp: string;
+}
+
 interface Props {
   conversations: ConversationGroup[];
   transcript: TranscriptMessage[];
   agents: AgentInfo[];
   activeConversationId: string | null;
   expandedConversationIds: string[];
+  proposals: PMProposalCard[];
   onToggleExpand: (conversationId: string) => void;
   onSwitchConversation: (conversationId: string) => void;
   onNewConversation: () => void;
   onMergePr: (conversationId: string) => void;
+  onApproveProposal: (ideaId: string) => void;
+  onDismissProposal: (ideaId: string) => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -181,10 +194,13 @@ export function WorkLogView({
   agents,
   activeConversationId,
   expandedConversationIds,
+  proposals,
   onToggleExpand,
   onSwitchConversation,
   onMergePr,
   onNewConversation,
+  onApproveProposal,
+  onDismissProposal,
 }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -221,6 +237,47 @@ export function WorkLogView({
           ))}
         </div>
       )}
+      {proposals.length > 0 && proposals.map((p) => (
+        <div key={p.ideaId} className="pm-proposal-card">
+          <div className="pm-proposal-header">
+            <span className={`worklog-status-badge status-proposal`}>proposal</span>
+            <span className="pm-proposal-title">{p.title}</span>
+            <span className="pm-proposal-priority">{p.priority}</span>
+          </div>
+          <div className="pm-proposal-body">
+            <div className="pm-proposal-section">
+              <h4>Problem</h4>
+              <p>{p.problem}</p>
+            </div>
+            <div className="pm-proposal-section">
+              <h4>Proposed Solution</h4>
+              <p>{p.proposal}</p>
+            </div>
+            {p.tlAssessment && (
+              <div className="pm-proposal-section pm-tl-assessment">
+                <h4>Technical Assessment (TL)</h4>
+                <p>{p.tlAssessment}</p>
+              </div>
+            )}
+          </div>
+          <div className="pm-proposal-actions">
+            <button
+              className="pm-approve-btn"
+              onClick={() => onApproveProposal(p.ideaId)}
+              type="button"
+            >
+              approve &amp; build
+            </button>
+            <button
+              className="pm-dismiss-btn"
+              onClick={() => onDismissProposal(p.ideaId)}
+              type="button"
+            >
+              dismiss
+            </button>
+          </div>
+        </div>
+      ))}
       {conversations.map((conv) => {
         const messages = transcript.filter((m) => m.conversation_id === conv.id);
 

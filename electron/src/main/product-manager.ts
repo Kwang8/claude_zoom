@@ -120,20 +120,22 @@ export interface PMIdea {
   source: "codebase" | "conversation" | "pattern";
   createdAt: string;
   score: number;        // 0-10, refined over time
-  vetted: boolean;      // has TL reviewed it?
+  cyclesSeen: number;   // how many cycles this idea has survived
+  dismissed: boolean;   // user dismissed this idea
+  tlAssessment: string | null; // TL's technical review
 }
 
 export interface PMProposal {
   idea: PMIdea;
-  tlFeedback: string;   // TL's technical assessment
-  fullProposal: string; // polished proposal text
+  tlAssessment: string;
 }
 
 interface PMState {
   ideas: PMIdea[];
   observations: string[];
   lastScanAt: string | null;
-  proposalHistory: string[];  // idea IDs already proposed
+  proposedIds: string[];      // idea IDs already proposed (avoid repeats)
+  dismissedIds: string[];     // idea IDs user dismissed (PM learns)
   userAnswers: string[];      // answers from "needs direction" conversations
 }
 
@@ -219,14 +221,15 @@ function loadPMState(cwd: string): PMState {
         ideas: data.ideas ?? [],
         observations: data.observations ?? [],
         lastScanAt: data.lastScanAt ?? null,
-        proposalHistory: data.proposalHistory ?? [],
+        proposedIds: data.proposedIds ?? data.proposalHistory ?? [],
+        dismissedIds: data.dismissedIds ?? [],
         userAnswers: data.userAnswers ?? [],
       };
     }
   } catch (e) {
     console.warn("[pm] failed to load state:", e);
   }
-  return { ideas: [], observations: [], lastScanAt: null, proposalHistory: [], userAnswers: [] };
+  return { ideas: [], observations: [], lastScanAt: null, proposedIds: [], dismissedIds: [], userAnswers: [] };
 }
 
 // ── Codebase Scanner ──
@@ -366,6 +369,7 @@ export interface PMStatusUpdate {
 export interface ProductManagerOpts {
   onProposal: (proposal: PMProposal) => void;
   onQuestion: (question: string) => void;
+  vetWithTL: (idea: PMIdea) => Promise<string>; // returns TL assessment
   onStatusUpdate?: (update: PMStatusUpdate) => void;
   onLog?: (msg: string) => void;
   scanIntervalMs?: number;
@@ -478,41 +482,72 @@ export class ProductManager {
     return this._state.observations;
   }
 
+  /** Mark an idea as dismissed — PM learns to avoid similar ideas. */
+  dismissIdea(ideaId: string): void {
+    this._state.dismissedIds.push(ideaId);
+    const idea = this._state.ideas.find((i) => i.id === ideaId);
+    if (idea) idea.dismissed = true;
+    savePMState(this._state, this._cwd);
+    this._log(`idea dismissed: ${idea?.title ?? ideaId}`);
+  }
+
   private async _cycle(): Promise<void> {
     if (!this._running) return;
     try {
       this._log("starting scan cycle...");
       this._emitStatus("scanning");
 
-      // Step 1: Scan codebase
+      // Step 1: Scan codebase + conversations
       const codeObs = scanCodebase(this._cwd);
-      this._log(`codebase scan: ${codeObs.length} observations`);
-
-      // Step 2: Scan conversations
       const convObs = scanConversations(this._cwd);
-      this._log(`conversation scan: ${convObs.length} observations`);
-
-      // Merge observations
       const allObs = [...codeObs, ...convObs];
-      this._state.observations = allObs.slice(-100); // cap at 100
+      this._state.observations = allObs.slice(-100);
       this._state.lastScanAt = new Date().toISOString();
+      this._log(`scan: ${codeObs.length} code + ${convObs.length} conversation observations`);
 
-      // Step 3: Generate ideas via local model
+      // Step 2: Generate new ideas via local model
       this._emitStatus("thinking");
       await this._generateIdeas(allObs);
 
-      // Step 4: Check if any high-priority ideas are ready to propose
-      const readyIdea = this._state.ideas.find(
-        (i) => i.priority === "high" && i.score >= 7 && !this._state.proposalHistory.includes(i.id)
-      );
-      if (readyIdea) {
-        this._log(`proposing: ${readyIdea.title}`);
-        this._state.proposalHistory.push(readyIdea.id);
-        this._opts.onProposal({
-          idea: readyIdea,
-          tlFeedback: "",
-          fullProposal: `## ${readyIdea.title}\n\n**Problem:** ${readyIdea.problem}\n\n**Proposal:** ${readyIdea.proposal}\n\n**Priority:** ${readyIdea.priority}`,
-        });
+      // Step 3: Age existing ideas — bump score for ideas that survive cycles
+      for (const idea of this._state.ideas) {
+        if (!idea.dismissed) {
+          idea.cyclesSeen = (idea.cyclesSeen ?? 0) + 1;
+          // Ideas that persist get a small score bump (max 10)
+          if (idea.cyclesSeen >= 3 && idea.score < 10) {
+            idea.score = Math.min(10, idea.score + 0.5);
+          }
+        }
+      }
+
+      // Step 4: Find the best unvetted idea to send to TL
+      const candidate = this._state.ideas
+        .filter((i) =>
+          !i.dismissed &&
+          !i.tlAssessment &&
+          !this._state.proposedIds.includes(i.id) &&
+          i.cyclesSeen >= 2 && // must survive at least 2 cycles
+          i.score >= 6
+        )
+        .sort((a, b) => b.score - a.score)[0];
+
+      if (candidate) {
+        this._log(`vetting with TL: ${candidate.title}`);
+        this._emitStatus("vetting");
+        try {
+          const assessment = await this._opts.vetWithTL(candidate);
+          candidate.tlAssessment = assessment;
+          this._log(`TL assessment received for: ${candidate.title}`);
+
+          // If TL says it's feasible, propose
+          if (assessment && !assessment.toLowerCase().includes("not feasible")) {
+            this._state.proposedIds.push(candidate.id);
+            this._opts.onProposal({ idea: candidate, tlAssessment: assessment });
+            this._log(`proposed: ${candidate.title}`);
+          }
+        } catch (e) {
+          this._log(`TL vetting failed: ${e}`);
+        }
       }
 
       savePMState(this._state, this._cwd);
@@ -545,6 +580,12 @@ export class ProductManager {
     }
 
     parts.push(`\n\nExisting ideas (don't repeat): ${existingTitles.join(", ") || "(none)"}`);
+
+    const dismissedTitles = this._state.ideas.filter((i) => i.dismissed).map((i) => i.title);
+    if (dismissedTitles.length > 0) {
+      parts.push(`Dismissed by user (AVOID these topics): ${dismissedTitles.join(", ")}`);
+    }
+
     parts.push(`\nGenerate 1-3 NEW innovative feature ideas. Focus on net-new capabilities, not reliability improvements. If you don't understand what this product does or who it's for, use <ASK> to ask the user.`);
 
     const prompt = parts.join("\n");
@@ -580,8 +621,10 @@ export class ProductManager {
           priority: ["high", "medium", "low"].includes(data.priority) ? data.priority : "medium",
           source: ["codebase", "conversation", "pattern"].includes(data.source) ? data.source : "codebase",
           createdAt: new Date().toISOString(),
-          score: data.priority === "high" ? 8 : data.priority === "medium" ? 5 : 3,
-          vetted: false,
+          score: data.priority === "high" ? 7 : data.priority === "medium" ? 4 : 2,
+          cyclesSeen: 0,
+          dismissed: false,
+          tlAssessment: null,
         };
         this._state.ideas.push(idea);
         this._log(`new idea: ${idea.title} (${idea.priority})`);

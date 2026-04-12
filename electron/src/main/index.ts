@@ -211,6 +211,12 @@ async function createWindow() {
       case "compact":
         engine.compactConversation();
         break;
+      case "approve_proposal":
+        conversationManager.approveProposal(msg.idea_id || "");
+        break;
+      case "dismiss_proposal":
+        conversationManager.dismissProposal(msg.idea_id || "");
+        break;
       case "quit":
         conversationManager.stopAll();
         app.quit();

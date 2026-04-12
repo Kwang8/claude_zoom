@@ -7,7 +7,8 @@ import {
   loadState,
   saveRegistry,
 } from "./state";
-import { ProductManager, PMProposal } from "./product-manager";
+import { ProductManager, PMProposal, PMIdea } from "./product-manager";
+import { extractFinalText } from "./narrator";
 
 export interface ConversationManagerOpts {
   targetCwd: string | null;
@@ -117,6 +118,7 @@ export class ConversationManager {
     this._pm = new ProductManager(cwd, {
       onProposal: (proposal) => this._handleProposal(proposal),
       onQuestion: (question) => this._handlePMQuestion(question),
+      vetWithTL: (idea) => this._vetIdeaWithTL(idea),
       onStatusUpdate: (update) => {
         this._opts.onEmit("__pm__", { type: "pm_status", ...update });
       },
@@ -141,57 +143,82 @@ export class ConversationManager {
     };
   }
 
+  /** Vet an idea with the TL (uses Sonnet via active conversation's TL session). */
+  private async _vetIdeaWithTL(idea: PMIdea): Promise<string> {
+    const engine = this.getActiveConversation();
+    if (!engine) return "No active TL session available.";
+
+    const prompt =
+      `A Product Manager proposes this feature:\n\n` +
+      `**${idea.title}**\n` +
+      `Problem: ${idea.problem}\n` +
+      `Proposal: ${idea.proposal}\n\n` +
+      `Give a brief technical assessment (2-3 sentences):\n` +
+      `- Is this feasible to build?\n` +
+      `- Roughly how complex? (small/medium/large)\n` +
+      `- Any risks or dependencies?\n\n` +
+      `Reply with just your assessment, no XML markers.`;
+
+    try {
+      const events: Record<string, any>[] = [];
+      for await (const event of engine.session.send(prompt)) {
+        events.push(event);
+      }
+      return extractFinalText(events) || "Assessment unavailable.";
+    } catch (e) {
+      return `Assessment failed: ${e}`;
+    }
+  }
+
   private _handleProposal(proposal: PMProposal): void {
-    const id = this.createConversation();
-    const engine = this.getConversation(id);
-    if (!engine) return;
-
+    // Lightweight: emit a proposal event, no ChatEngine needed
     const timestamp = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
-    const { idea } = proposal;
+    const { idea, tlAssessment } = proposal;
 
-    // Build a rich proposal document
-    const doc = [
-      `# ${idea.title}`,
-      ``,
-      `## Summary`,
-      idea.problem,
-      ``,
-      `## Proposed Solution`,
-      idea.proposal,
-      ``,
-      `## Details`,
-      `- **Priority:** ${idea.priority}`,
-      `- **Source:** ${idea.source === "codebase" ? "Codebase analysis" : idea.source === "conversation" ? "User conversation patterns" : "Pattern detection"}`,
-      `- **Generated:** ${new Date(idea.createdAt).toLocaleString()}`,
-      ``,
-      `## Why This Matters`,
-      idea.priority === "high"
-        ? `This is a high-priority improvement that would significantly impact the product. The PM agent identified this based on ${idea.source === "codebase" ? "gaps in the codebase" : "repeated user requests"}.`
-        : `This is a ${idea.priority}-priority suggestion based on ${idea.source === "codebase" ? "codebase observations" : "usage patterns"}.`,
-      ``,
-      `---`,
-      `*Say "do it" to start working on this, or dismiss to skip.*`,
-    ].join("\n");
+    // Emit as a special proposal event (renderer handles display)
+    this._opts.onEmit("__pm__", {
+      type: "pm_proposal",
+      idea_id: idea.id,
+      title: idea.title,
+      problem: idea.problem,
+      proposal: idea.proposal,
+      priority: idea.priority,
+      tl_assessment: tlAssessment,
+      timestamp,
+    });
+    console.log(`[pm] proposal emitted: ${idea.title}`);
+  }
+
+  /** User approved a proposal — create a real task. */
+  approveProposal(ideaId: string): void {
+    const idea = this._pm?.getIdeas().find((i) => i.id === ideaId);
+    if (!idea) return;
+
+    // Create a new conversation and delegate to TL
+    const id = this.createConversation();
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
 
     this._opts.onEmit(id, {
       type: "conversation_created",
       conversation_id: id,
       timestamp,
     });
-    this._opts.onEmit(id, {
-      type: "conversation_status",
-      conversation_id: id,
-      status: "proposal",
-      detail: idea.title,
-    });
-    this._opts.onEmit(id, {
-      type: "transcript_message",
-      role: "claude",
-      text: doc,
-      timestamp,
-      conversation_id: id,
-    });
-    console.log(`[pm] proposal created as conversation ${id}: ${idea.title}`);
+    this.setActive(id);
+
+    // Start the engine and send the task to TL
+    const engine = this.getConversation(id);
+    if (engine) {
+      engine.start().then(() => {
+        engine.sendText(`Implement this feature: ${idea.title}. ${idea.proposal}`);
+      });
+    }
+    console.log(`[pm] proposal approved, created task: ${idea.title}`);
+  }
+
+  /** User dismissed a proposal — PM learns. */
+  dismissProposal(ideaId: string): void {
+    this._pm?.dismissIdea(ideaId);
+    console.log(`[pm] proposal dismissed: ${ideaId}`);
   }
 
   private _handlePMQuestion(question: string): void {

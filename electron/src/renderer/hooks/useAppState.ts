@@ -22,6 +22,7 @@ export interface State {
   connected: boolean;
   githubRepo: string | null;
   pmStatus: { status: string; ideaCount: number; lastActivity: string | null };
+  pmProposals: { ideaId: string; title: string; problem: string; proposal: string; priority: string; tlAssessment: string; timestamp: string }[];
 }
 
 const initialState: State = {
@@ -35,6 +36,7 @@ const initialState: State = {
   ticker: "",
   progress: "ready",
   action: "connecting...",
+  pmProposals: [],
   isSpeaking: false,
   pmStatus: { status: "starting", ideaCount: 0, lastActivity: null },
   connected: false,
@@ -234,6 +236,20 @@ function reducer(state: State, action: Action): State {
           ideaCount: msg.idea_count,
           lastActivity: msg.last_activity,
         },
+      };
+
+    case "pm_proposal":
+      return {
+        ...state,
+        pmProposals: [...state.pmProposals, {
+          ideaId: msg.idea_id,
+          title: msg.title,
+          problem: msg.problem,
+          proposal: msg.proposal,
+          priority: msg.priority,
+          tlAssessment: msg.tl_assessment,
+          timestamp: msg.timestamp,
+        }],
       };
 
     default:

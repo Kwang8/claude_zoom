@@ -13,6 +13,8 @@ export type ClientMessage =
   | { type: "create_conversation" }
   | { type: "switch_conversation"; conversation_id: string }
   | { type: "merge_pr" }
+  | { type: "approve_proposal"; idea_id: string }
+  | { type: "dismiss_proposal"; idea_id: string }
   | { type: "quit" };
 
 // ── Server -> Client ──
@@ -100,4 +102,5 @@ export type ServerMessage =
   | { type: "conversation_switched"; conversation_id: string }
   | { type: "conversation_status"; conversation_id: string; status: ConversationStatus; detail?: string; pr_url?: string }
   | { type: "usage-update"; totalInputTokens: number; totalOutputTokens: number }
-  | { type: "pm_status"; status: string; idea_count: number; last_activity: string | null };
+  | { type: "pm_status"; status: string; idea_count: number; last_activity: string | null }
+  | { type: "pm_proposal"; idea_id: string; title: string; problem: string; proposal: string; priority: string; tl_assessment: string; timestamp: string };

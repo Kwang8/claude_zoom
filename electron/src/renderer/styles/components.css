@@ -1059,6 +1059,113 @@
   animation: dot-pulse 2s ease-in-out infinite;
 }
 
+/* ── PM Proposal Cards ── */
+
+.pm-proposal-card {
+  border: 1px solid color-mix(in srgb, var(--border) 40%, var(--accent-magenta) 60%);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--accent-magenta) 8%);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.pm-proposal-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pm-proposal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.pm-proposal-priority {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.pm-proposal-body {
+  padding: 14px;
+}
+
+.pm-proposal-section {
+  margin-bottom: 12px;
+}
+
+.pm-proposal-section:last-child {
+  margin-bottom: 0;
+}
+
+.pm-proposal-section h4 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 4px;
+}
+
+.pm-proposal-section p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.pm-tl-assessment {
+  background: color-mix(in srgb, var(--bg-secondary) 80%, var(--accent-cyan) 20%);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.pm-tl-assessment h4 {
+  color: var(--accent-cyan);
+}
+
+.pm-proposal-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.pm-approve-btn {
+  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+  border: none;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 18px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.pm-approve-btn:hover { opacity: 0.9; }
+
+.pm-dismiss-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.pm-dismiss-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--text-muted);
+}
+
 .worklog-status-badge.status-active {
   color: var(--accent-cyan);
   background: color-mix(in srgb, transparent 80%, var(--accent-cyan) 20%);

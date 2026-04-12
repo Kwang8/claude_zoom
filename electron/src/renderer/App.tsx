@@ -157,6 +157,7 @@ export function App() {
         agents={state.agents}
         activeConversationId={state.activeConversationId}
         expandedConversationIds={state.expandedConversationIds}
+        proposals={state.pmProposals}
         onToggleExpand={toggleConversationExpand}
         onSwitchConversation={handleSwitchConversation}
         onNewConversation={handleNewConversation}
@@ -164,6 +165,8 @@ export function App() {
           send({ type: "switch_conversation", conversation_id: convId });
           send({ type: "merge_pr" });
         }}
+        onApproveProposal={(ideaId) => send({ type: "approve_proposal", idea_id: ideaId })}
+        onDismissProposal={(ideaId) => send({ type: "dismiss_proposal", idea_id: ideaId })}
       />
     );
   }
