@@ -94,7 +94,7 @@
 }
 
 .avatar-orb.listening {
-  box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
+  box-shadow: 0 0 20px rgba(0, 136, 187, 0.35);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -103,12 +103,12 @@
 }
 
 .avatar-orb.working {
-  box-shadow: 0 0 20px rgba(160, 96, 240, 0.4);
+  box-shadow: 0 0 20px rgba(85, 32, 187, 0.3);
   animation: pulse 2s ease-in-out infinite;
 }
 
 .avatar-orb.talking {
-  box-shadow: 0 0 25px rgba(0, 212, 255, 0.5);
+  box-shadow: 0 0 25px rgba(0, 136, 187, 0.4);
   animation: talk-pulse 0.4s ease-in-out infinite;
 }
 
@@ -671,12 +671,12 @@
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.5));
+  filter: drop-shadow(0 0 4px rgba(0, 136, 187, 0.4));
   transition: filter 0.2s ease, transform 0.2s ease;
 }
 
 .tech-lead-avatar:hover {
-  filter: drop-shadow(0 0 8px rgba(0, 212, 255, 0.9));
+  filter: drop-shadow(0 0 8px rgba(0, 136, 187, 0.7));
   transform: scale(1.15) rotate(-5deg);
 }
 
@@ -713,15 +713,15 @@
 
 .pr-link,
 .hyperlink {
-  color: #00d4ff;
+  color: var(--accent-cyan);
   text-decoration: none;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.4);
+  border-bottom: 1px solid color-mix(in srgb, transparent 60%, var(--accent-cyan) 40%);
   cursor: pointer;
 }
 
 .pr-link:hover,
 .hyperlink:hover {
-  border-bottom-color: #00d4ff;
+  border-bottom-color: var(--accent-cyan);
 }
 
 .transcript-tool-use {
@@ -944,7 +944,7 @@
 
 .statusbar-recording {
   border-top-color: var(--accent-magenta);
-  box-shadow: 0 -1px 8px rgba(224, 64, 160, 0.25);
+  box-shadow: 0 -1px 8px rgba(184, 24, 120, 0.2);
   transition: box-shadow 0.15s ease, border-top-color 0.15s ease;
 }
 
@@ -966,8 +966,8 @@
 }
 
 @keyframes recording-pulse {
-  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(224, 64, 160, 0.5); }
-  50% { transform: scale(1.35); box-shadow: 0 0 0 4px rgba(224, 64, 160, 0); }
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(184, 24, 120, 0.45); }
+  50% { transform: scale(1.35); box-shadow: 0 0 0 4px rgba(184, 24, 120, 0); }
 }
 
 @keyframes recording-blink {
@@ -1274,7 +1274,7 @@
   font-size: 12px;
   color: var(--accent-cyan);
   text-decoration: none;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.3);
+  border-bottom: 1px solid color-mix(in srgb, transparent 70%, var(--accent-cyan) 30%);
   cursor: pointer;
   flex: 1;
   overflow: hidden;
