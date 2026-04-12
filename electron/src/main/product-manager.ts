@@ -550,6 +550,23 @@ export class ProductManager {
       this._state.lastScanAt = new Date().toISOString();
       this._log(`scan: ${codeObs.length} code + ${convObs.length} conversation observations`);
 
+      // Step 1.5: If PM has no product context yet, ask the user first
+      if (this._state.userAnswers.length === 0) {
+        this._log("no product context yet — asking user for direction");
+        this._opts.onQuestion(
+          "I've scanned the codebase and I can see the project structure, but I'd love to understand the bigger picture:\n\n" +
+          "1. **Who are the target users?** (developers, teams, enterprises?)\n" +
+          "2. **What's the core problem this solves** that existing tools don't?\n" +
+          "3. **What's your vision for where this product goes next?**\n" +
+          "4. **What kind of features excite you most?** (UX polish, new capabilities, integrations, AI features?)\n\n" +
+          "This will help me generate much better, product-specific feature ideas."
+        );
+        savePMState(this._state, this._cwd);
+        this._emitStatus("idle");
+        this._log("scan cycle complete (waiting for user context)");
+        return; // Don't generate ideas yet
+      }
+
       // Step 2: Generate new ideas via local model
       this._emitStatus("thinking");
       await this._generateIdeas(allObs);
