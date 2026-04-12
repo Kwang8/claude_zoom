@@ -609,8 +609,8 @@ export class ProductManager {
           !i.dismissed &&
           !i.tlAssessment &&
           !this._state.proposedIds.includes(i.id) &&
-          i.cyclesSeen >= 2 && // must survive at least 2 cycles
-          i.score >= 6
+          i.cyclesSeen >= 1 && // must survive at least 1 cycle
+          i.score >= 5
         )
         .sort((a, b) => b.score - a.score)[0];
 
