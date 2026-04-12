@@ -225,10 +225,21 @@ export class ConversationManager {
     const id = this.createConversation();
     const timestamp = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
 
+    // Set active and start engine so user can respond immediately
+    this.setActive(id);
+    const engine = this.getConversation(id);
+    if (engine && !engine.isStarted) {
+      engine.start().catch((e) => console.error("[pm] failed to start question conversation:", e));
+    }
+
     this._opts.onEmit(id, {
       type: "conversation_created",
       conversation_id: id,
       timestamp,
+    });
+    this._opts.onEmit(id, {
+      type: "conversation_switched",
+      conversation_id: id,
     });
     this._opts.onEmit(id, {
       type: "conversation_status",
@@ -243,7 +254,7 @@ export class ConversationManager {
       timestamp,
       conversation_id: id,
     });
-    console.log(`[pm] needs direction conversation created: ${id}, emitted 3 events`);
+    console.log(`[pm] needs direction conversation created and activated: ${id}`);
   }
 
   /** Forward a user's answer to the PM for product context. */
