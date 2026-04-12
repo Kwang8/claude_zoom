@@ -4,6 +4,7 @@ import {
   ConversationRegistry,
   ConversationRegistryEntry,
   loadRegistry,
+  loadState,
   saveRegistry,
 } from "./state";
 import { ProductManager, PMProposal } from "./product-manager";
@@ -188,9 +189,20 @@ export class ConversationManager {
     const registry = loadRegistry(cwd);
     if (!registry || registry.conversations.length === 0) return;
 
+    let pruned = 0;
     for (const entry of registry.conversations) {
+      // Skip empty conversations (no saved messages)
+      const state = loadState(cwd, entry.id);
+      if (!state || !state.messages || state.messages.length === 0) {
+        pruned++;
+        continue;
+      }
       const engine = this._buildEngine(entry.id);
       this._conversations.set(entry.id, { id: entry.id, engine, createdAt: entry.createdAt });
+    }
+    if (pruned > 0) {
+      console.log(`[conversations] pruned ${pruned} empty conversations from registry`);
+      this._saveRegistry();
     }
     if (registry.activeConversationId && this._conversations.has(registry.activeConversationId)) {
       this.activeConversationId = registry.activeConversationId;
