@@ -22,6 +22,7 @@ interface ConversationEntry {
   id: string;
   engine: ChatEngine;
   createdAt: string;
+  pmQuestion?: boolean; // true if this is a PM "needs direction" conversation
 }
 
 export class ConversationManager {
@@ -225,6 +226,10 @@ export class ConversationManager {
     const id = this.createConversation();
     const timestamp = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
 
+    // Tag this as a PM question conversation
+    const entry = this._conversations.get(id);
+    if (entry) entry.pmQuestion = true;
+
     // Set active and start engine so user can respond immediately
     this.setActive(id);
     const engine = this.getConversation(id);
@@ -260,6 +265,45 @@ export class ConversationManager {
   /** Forward a user's answer to the PM for product context. */
   addPMAnswer(answer: string): void {
     this._pm?.addUserAnswer(answer);
+  }
+
+  /** Check if the active conversation is a PM question. If so, route the answer to PM. */
+  interceptPMAnswer(text: string): boolean {
+    if (!this.activeConversationId) return false;
+    const entry = this._conversations.get(this.activeConversationId);
+    if (!entry?.pmQuestion) return false;
+
+    // Route to PM
+    this._pm?.addUserAnswer(text);
+
+    // Acknowledge in the conversation
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+    this._opts.onEmit(this.activeConversationId, {
+      type: "transcript_message",
+      role: "user",
+      text,
+      timestamp,
+      conversation_id: this.activeConversationId,
+    });
+    this._opts.onEmit(this.activeConversationId, {
+      type: "transcript_message",
+      role: "claude",
+      text: "Got it — I'll use this context to generate better feature ideas next cycle.",
+      timestamp,
+      conversation_id: this.activeConversationId,
+    });
+    this._opts.onEmit(this.activeConversationId, {
+      type: "conversation_status",
+      conversation_id: this.activeConversationId,
+      status: "completed",
+      detail: "Context received",
+    });
+
+    // Unmark so future messages go to TL normally
+    entry.pmQuestion = false;
+
+    console.log(`[pm] user answer recorded: ${text.slice(0, 80)}`);
+    return true;
   }
 
   /** Clear all PM ideas and reset. */

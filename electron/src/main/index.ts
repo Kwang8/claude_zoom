@@ -178,6 +178,11 @@ async function createWindow() {
       return;
     }
 
+    // ── Intercept PM question answers ──
+    if (msgType === "send_text" && conversationManager.interceptPMAnswer(msg.text || "")) {
+      return;
+    }
+
     // ── Commands routed to a specific or active conversation ──
     const engine = conversationManager.resolveTarget(msg.conversation_id);
     if (!engine) return;
