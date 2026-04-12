@@ -40,7 +40,8 @@ export type ConversationStatus =
   | "needs_input"
   | "pr_open"
   | "completed"
-  | "compacted";
+  | "compacted"
+  | "proposal";
 
 export interface ConversationGroup {
   id: string;

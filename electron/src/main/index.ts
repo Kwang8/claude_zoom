@@ -257,6 +257,9 @@ async function createWindow() {
   await conversationManager.startAll();
   console.log("[main] conversation manager started with", conversationManager.listConversations().length, "conversation(s)");
 
+  // Start background Product Manager agent
+  conversationManager.startProductManager();
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });

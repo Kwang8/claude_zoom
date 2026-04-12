@@ -766,6 +766,17 @@
   background: color-mix(in srgb, transparent 80%, var(--accent-green) 20%);
 }
 
+.worklog-entry.collapsed.status-proposal {
+  border-color: color-mix(in srgb, var(--border) 40%, var(--accent-magenta) 60%);
+}
+.worklog-entry.collapsed.status-proposal:hover { border-color: var(--accent-magenta); }
+
+.worklog-status-badge.status-proposal {
+  color: var(--accent-magenta);
+  background: color-mix(in srgb, transparent 80%, var(--accent-magenta) 20%);
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+
 .worklog-status-badge.status-active {
   color: var(--accent-cyan);
   background: color-mix(in srgb, transparent 80%, var(--accent-cyan) 20%);

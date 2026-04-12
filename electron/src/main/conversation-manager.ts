@@ -6,6 +6,7 @@ import {
   loadRegistry,
   saveRegistry,
 } from "./state";
+import { ProductManager, PMProposal } from "./product-manager";
 
 export interface ConversationManagerOpts {
   targetCwd: string | null;
@@ -25,6 +26,7 @@ export class ConversationManager {
   private _conversations: Map<string, ConversationEntry> = new Map();
   public activeConversationId: string | null = null;
   private _opts: ConversationManagerOpts;
+  private _pm: ProductManager | null = null;
 
   constructor(opts: ConversationManagerOpts) {
     this._opts = opts;
@@ -104,6 +106,54 @@ export class ConversationManager {
     for (const { engine } of this._conversations.values()) {
       engine.stop();
     }
+    this._pm?.stop();
+  }
+
+  /** Start the background Product Manager agent. */
+  startProductManager(): void {
+    const cwd = this._opts.targetCwd;
+    if (!cwd) return;
+    this._pm = new ProductManager(cwd, {
+      onProposal: (proposal) => this._handleProposal(proposal),
+      onLog: (msg) => console.log(`[pm] ${msg}`),
+    });
+    this._pm.start();
+  }
+
+  private _handleProposal(proposal: PMProposal): void {
+    // Create a conversation for the proposal
+    const id = this.createConversation();
+    const engine = this.getConversation(id);
+    if (!engine) return;
+
+    // Emit proposal status + content to the renderer
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+    this._opts.onEmit(id, {
+      type: "conversation_created",
+      conversation_id: id,
+      timestamp,
+    });
+    this._opts.onEmit(id, {
+      type: "conversation_status",
+      conversation_id: id,
+      status: "proposal",
+      detail: proposal.idea.title,
+    });
+    this._opts.onEmit(id, {
+      type: "transcript_message",
+      role: "system",
+      text: `🐶 PM Proposal: ${proposal.idea.title}`,
+      timestamp,
+      conversation_id: id,
+    });
+    this._opts.onEmit(id, {
+      type: "transcript_message",
+      role: "claude",
+      text: proposal.fullProposal,
+      timestamp,
+      conversation_id: id,
+    });
+    console.log(`[pm] proposal created as conversation ${id}: ${proposal.idea.title}`);
   }
 
   replayStateAll(): void {

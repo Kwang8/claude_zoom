@@ -101,6 +101,7 @@ const STATUS_LABELS: Record<string, { label: string; className: string }> = {
   pr_open: { label: "PR open", className: "status-pr-open" },
   completed: { label: "completed", className: "status-completed" },
   active: { label: "idle", className: "status-active" },
+  proposal: { label: "proposal", className: "status-proposal" },
 };
 
 /** Derive a short summary from the first user message in a conversation. */
@@ -249,7 +250,7 @@ export function WorkLogView({
 
         // Non-focused — collapsed with status badge
         // Completed/pr_open: toggle expand inline. Active/working/needs_input: switch to it.
-        const isFinished = conv.status === "completed" || conv.status === "pr_open";
+        const isFinished = conv.status === "completed" || conv.status === "pr_open" || conv.status === "proposal";
         const isExpanded = expandedConversationIds.includes(conv.id);
 
         return (
