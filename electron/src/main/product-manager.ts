@@ -65,10 +65,35 @@ async function ensureOllama(model: string, log: (msg: string) => void): Promise<
     if (!list.toLowerCase().includes(modelBase.toLowerCase())) {
       log(`Pulling model ${model}... (this may take a while on first run)`);
       try {
-        execFileSync(ollamaPath, ["pull", model], {
-          encoding: "utf-8",
-          stdio: ["pipe", "pipe", "pipe"],
-          timeout: 600_000, // 10 min timeout
+        await new Promise<void>((resolve, reject) => {
+          const proc = spawnProcess(ollamaPath!, ["pull", model], {
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+          let lastPct = "";
+          proc.stderr?.on("data", (chunk: Buffer) => {
+            const line = chunk.toString().trim();
+            // Ollama outputs progress like "pulling abc123... 45%"
+            const pctMatch = /(\d+)%/.exec(line);
+            if (pctMatch && pctMatch[1] !== lastPct) {
+              lastPct = pctMatch[1];
+              log(`downloading ${model}: ${lastPct}%`);
+            }
+          });
+          proc.stdout?.on("data", (chunk: Buffer) => {
+            const line = chunk.toString().trim();
+            const pctMatch = /(\d+)%/.exec(line);
+            if (pctMatch && pctMatch[1] !== lastPct) {
+              lastPct = pctMatch[1];
+              log(`downloading ${model}: ${lastPct}%`);
+            }
+          });
+          proc.on("exit", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`ollama pull exited ${code}`));
+          });
+          proc.on("error", reject);
+          // 10 min timeout
+          setTimeout(() => { proc.kill(); reject(new Error("timeout")); }, 600_000);
         });
         log(`Model ${model} pulled successfully`);
       } catch (e) {
@@ -356,7 +381,18 @@ export class ProductManager {
   async start(): Promise<void> {
     this._emitStatus("setting up");
     const model = this._session.model;
-    const ready = await ensureOllama(model, this._log);
+    const ready = await ensureOllama(model, (msg) => {
+      this._log(msg);
+      // Forward download progress to sidebar
+      const pctMatch = /(\d+)%/.exec(msg);
+      if (pctMatch) {
+        this._emitStatus(`downloading ${pctMatch[1]}%`);
+      } else if (msg.includes("install")) {
+        this._emitStatus("installing");
+      } else if (msg.includes("Starting")) {
+        this._emitStatus("starting server");
+      }
+    });
     if (!ready) {
       this._log("Ollama setup failed — PM agent disabled");
       this._emitStatus("disabled");
