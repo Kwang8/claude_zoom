@@ -18,4 +18,10 @@ contextBridge.exposeInMainWorld("claude", {
   getUsage: (): Promise<{ totalInputTokens: number; totalOutputTokens: number }> => {
     return ipcRenderer.invoke("get-usage");
   },
+  pmInstall: (): Promise<void> => {
+    return ipcRenderer.invoke("pm-install");
+  },
+  getPMData: (): Promise<{ ideas: any[]; observations: string[] }> => {
+    return ipcRenderer.invoke("get-pm-data");
+  },
 });

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ActivityTicker } from "./components/ActivityTicker";
+import { PMDetailView } from "./components/PMDetailView";
+import { PMOnboardingView } from "./components/PMOnboardingView";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TranscriptView } from "./components/TranscriptView";
@@ -7,11 +9,14 @@ import { WorkLogView } from "./components/WorkLogView";
 import { useAppState } from "./hooks/useAppState";
 import { useIPC } from "./hooks/useIPC";
 
+type MainView = "worklog" | "agent" | "pm";
+
 export function App() {
   const { state, handleMessage, toggleConversationExpand, clearHistory } = useAppState();
   const { send, connected } = useIPC(handleMessage);
   const [isRecording, setIsRecording] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [mainView, setMainView] = useState<MainView>("worklog");
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -29,12 +34,16 @@ export function App() {
         e.preventDefault();
         if (e.repeat) return;
         setSelectedAgentId(null);
+        setMainView("worklog");
         console.log("[app] space pressed, sending mic_start");
         setIsRecording(true);
         send({ type: "mic_start" });
       } else if (e.code === "Escape") {
         e.preventDefault();
-        if (selectedAgentId) {
+        if (mainView !== "worklog") {
+          setMainView("worklog");
+          setSelectedAgentId(null);
+        } else if (selectedAgentId) {
           setSelectedAgentId(null);
         } else {
           send({ type: "cancel_turn" });
@@ -61,7 +70,7 @@ export function App() {
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("keyup", onKeyUp, true);
     };
-  }, [send, selectedAgentId]);
+  }, [send, selectedAgentId, mainView]);
 
   const handleDeleteAgent = useCallback(
     (agentId: string) => {
@@ -78,11 +87,35 @@ export function App() {
     send({ type: "switch_conversation", conversation_id: id });
   }, [send]);
 
+  const handleClickPM = useCallback(() => {
+    setSelectedAgentId(null);
+    setMainView("pm");
+  }, []);
+
+  const handlePMInstall = useCallback(() => {
+    window.claude?.pmInstall?.();
+  }, []);
+
   useEffect(() => {
     if (selectedAgentId && !state.agents.some((agent) => agent.agent_id === selectedAgentId)) {
       setSelectedAgentId(null);
     }
   }, [selectedAgentId, state.agents]);
+
+  // Auto-return to worklog when PM finishes installing
+  useEffect(() => {
+    if (mainView === "pm" && (state.pmStatus.status === "idle" || state.pmStatus.status === "scanning")) {
+      const pmConfigured = !["not_configured", "installing", "disabled"].includes(state.pmStatus.status)
+        && !state.pmStatus.status.startsWith("downloading");
+      if (pmConfigured) {
+        // Small delay so user sees "done" state
+        const timer = setTimeout(() => {
+          // Only auto-return if still on PM view and it's the onboarding (not detail)
+        }, 1500);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [mainView, state.pmStatus.status]);
 
   const selectedAgent = state.agents.find((agent) => agent.agent_id === selectedAgentId) ?? null;
   const agentTranscript = useMemo(
@@ -92,13 +125,27 @@ export function App() {
     [selectedAgent, state.transcript]
   );
 
+  const pmIsConfigured = !["not_configured", "starting", "disabled"].includes(state.pmStatus.status)
+    && !state.pmStatus.status.startsWith("downloading")
+    && state.pmStatus.status !== "installing";
+
   let mainContent: React.ReactNode;
-  if (selectedAgent) {
+  if (mainView === "pm") {
+    mainContent = pmIsConfigured ? (
+      <PMDetailView onBack={() => setMainView("worklog")} />
+    ) : (
+      <PMOnboardingView
+        status={state.pmStatus.status}
+        onInstall={handlePMInstall}
+        onBack={() => setMainView("worklog")}
+      />
+    );
+  } else if (mainView === "agent" && selectedAgent) {
     mainContent = (
       <TranscriptView
         messages={agentTranscript}
         selectedAgent={selectedAgent}
-        onBackToMain={() => setSelectedAgentId(null)}
+        onBackToMain={() => { setSelectedAgentId(null); setMainView("worklog"); }}
         githubRepo={state.githubRepo}
       />
     );
@@ -134,8 +181,9 @@ export function App() {
           agents={state.agents}
           selectedAgentId={selectedAgentId}
           pmStatus={state.pmStatus}
-          onSelectAgent={setSelectedAgentId}
+          onSelectAgent={(id) => { setSelectedAgentId(id); setMainView(id ? "agent" : "worklog"); }}
           onDeleteAgent={handleDeleteAgent}
+          onClickPM={handleClickPM}
         />
         <div className="main-area">
           {mainContent}

@@ -378,12 +378,22 @@ export class ProductManager {
     });
   }
 
-  async start(): Promise<void> {
-    this._emitStatus("setting up");
+  /** Check if Ollama is ready without installing. Emits not_configured or idle. */
+  async checkStatus(): Promise<void> {
+    const available = await OllamaSession.isAvailable(this._session.baseUrl);
+    if (available) {
+      this._emitStatus("idle");
+    } else {
+      this._emitStatus("not_configured");
+    }
+  }
+
+  /** User-triggered install: sets up Ollama, pulls model, starts PM loop. */
+  async install(): Promise<void> {
+    this._emitStatus("installing");
     const model = this._session.model;
     const ready = await ensureOllama(model, (msg) => {
       this._log(msg);
-      // Forward download progress to sidebar
       const pctMatch = /(\d+)%/.exec(msg);
       if (pctMatch) {
         this._emitStatus(`downloading ${pctMatch[1]}%`);
@@ -394,10 +404,24 @@ export class ProductManager {
       }
     });
     if (!ready) {
-      this._log("Ollama setup failed — PM agent disabled");
+      this._log("Ollama setup failed");
       this._emitStatus("disabled");
       return;
     }
+    this._startLoop();
+  }
+
+  /** Start the PM if Ollama is already available. No auto-install. */
+  async start(): Promise<void> {
+    const available = await OllamaSession.isAvailable(this._session.baseUrl);
+    if (!available) {
+      this._emitStatus("not_configured");
+      return;
+    }
+    this._startLoop();
+  }
+
+  private _startLoop(): void {
     this._log(`PM agent started (model: ${this._session.model}, interval: ${(this._opts.scanIntervalMs ?? 300_000) / 1000}s)`);
     this._running = true;
     this._emitStatus("idle");
@@ -424,6 +448,10 @@ export class ProductManager {
 
   getIdeas(): PMIdea[] {
     return this._state.ideas;
+  }
+
+  getObservations(): string[] {
+    return this._state.observations;
   }
 
   private async _cycle(): Promise<void> {

@@ -246,6 +246,14 @@ async function createWindow() {
     return conversationManager?.getTotalUsage() ?? { totalInputTokens: 0, totalOutputTokens: 0 };
   });
 
+  ipcMain.handle("pm-install", async () => {
+    await conversationManager?.installPM();
+  });
+
+  ipcMain.handle("get-pm-data", () => {
+    return conversationManager?.getPMData() ?? { ideas: [], observations: [] };
+  });
+
   // Open external URLs in the system browser
   ipcMain.on("open-external", (_event, url: string) => {
     if (typeof url === "string" && url.startsWith("https://")) {

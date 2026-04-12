@@ -7,6 +7,10 @@ declare global {
       send: (msg: Record<string, any>) => void;
       onEvent: (callback: (msg: Record<string, any>) => void) => () => void;
       removeAllListeners: () => void;
+      openExternal?: (url: string) => void;
+      getUsage?: () => Promise<{ totalInputTokens: number; totalOutputTokens: number }>;
+      pmInstall?: () => Promise<void>;
+      getPMData?: () => Promise<{ ideas: any[]; observations: string[] }>;
     };
   }
 }

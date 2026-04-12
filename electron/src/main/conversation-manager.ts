@@ -124,6 +124,22 @@ export class ConversationManager {
     this._pm.start();
   }
 
+  /** User-triggered PM install from the onboarding UI. */
+  async installPM(): Promise<void> {
+    if (this._pm) {
+      await this._pm.install();
+    }
+  }
+
+  /** Get PM data for the detail view. */
+  getPMData(): { ideas: any[]; observations: string[] } {
+    if (!this._pm) return { ideas: [], observations: [] };
+    return {
+      ideas: this._pm.getIdeas(),
+      observations: this._pm.getObservations(),
+    };
+  }
+
   private _handleProposal(proposal: PMProposal): void {
     // Create a conversation for the proposal
     const id = this.createConversation();

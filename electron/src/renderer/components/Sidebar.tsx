@@ -44,27 +44,31 @@ function UsagePanel() {
   );
 }
 
-function PMPanel({ status, ideaCount, lastActivity }: {
+function PMPanel({ status, ideaCount, lastActivity, onClick }: {
   status: string;
   ideaCount: number;
   lastActivity: string | null;
+  onClick: () => void;
 }) {
+  const isNotConfigured = status === "not_configured" || status === "starting";
+  const dotClass = status === "scanning" || status === "thinking" ? "working"
+    : status === "disabled" || status === "not_configured" ? "error"
+    : status.startsWith("downloading") || status === "installing" ? "working"
+    : "done";
+
   return (
-    <div className="pm-panel">
+    <div className="pm-panel" onClick={onClick} role="button" tabIndex={0} style={{ cursor: "pointer" }}>
       <div className="agents-header">product manager</div>
       <div className="pm-status">
         <div className="pm-status-row">
-          <span className={`pm-status-dot ${status === "scanning" ? "working" : status === "disabled" ? "error" : "done"}`} />
-          <span className="pm-status-label">{status}</span>
+          <span className={`pm-status-dot ${dotClass}`} />
+          <span className="pm-status-label">
+            {isNotConfigured ? "click to set up" : status}
+          </span>
         </div>
         {ideaCount > 0 && (
           <div className="pm-status-row">
             <span className="pm-idea-count">{ideaCount} idea{ideaCount !== 1 ? "s" : ""}</span>
-          </div>
-        )}
-        {lastActivity && (
-          <div className="pm-status-row">
-            <span className="pm-last-activity">{lastActivity}</span>
           </div>
         )}
       </div>
@@ -80,9 +84,10 @@ interface Props {
   pmStatus: { status: string; ideaCount: number; lastActivity: string | null };
   onSelectAgent: (agentId: string | null) => void;
   onDeleteAgent: (agentId: string) => void;
+  onClickPM: () => void;
 }
 
-export function Sidebar({ appState, narration, agents, selectedAgentId, pmStatus, onSelectAgent, onDeleteAgent }: Props) {
+export function Sidebar({ appState, narration, agents, selectedAgentId, pmStatus, onSelectAgent, onDeleteAgent, onClickPM }: Props) {
   return (
     <div className="sidebar">
       <AvatarPanel
@@ -92,7 +97,7 @@ export function Sidebar({ appState, narration, agents, selectedAgentId, pmStatus
         onClick={() => onSelectAgent(null)}
       />
       <UsagePanel />
-      <PMPanel {...pmStatus} />
+      <PMPanel {...pmStatus} onClick={onClickPM} />
       {agents.length > 0 && (
         <>
           <div className="agents-header">sub agents</div>
